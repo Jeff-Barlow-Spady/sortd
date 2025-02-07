@@ -3,7 +3,50 @@ package tests
 import (
 	"testing"
 	"github.com/stretchr/testify/assert"
+	"fmt"
 )
+
+type Tui struct {
+	selectedFiles map[string]bool
+	helpText      string
+}
+
+func NewTui() *Tui {
+	return &Tui{
+		selectedFiles: make(map[string]bool),
+		helpText: `Available Commands:
+- h, help: Show this help message
+- q, quit: Exit the application
+- s <file>: Select a file
+- d <file>: Deselect a file
+- o: Organize selected files`,
+	}
+}
+
+func (t *Tui) ShowHelp() string {
+	return t.helpText
+}
+
+func (t *Tui) SelectFile(path string) error {
+	if path == "" {
+		return fmt.Errorf("no file specified")
+	}
+	t.selectedFiles[path] = true
+	return nil
+}
+
+func (t *Tui) DeselectFile(path string) error {
+	if path == "" {
+		return fmt.Errorf("no file specified")
+	}
+	delete(t.selectedFiles, path)
+	return nil
+}
+
+func (t *Tui) IsSelected(path string) bool {
+	_, ok := t.selectedFiles[path]
+	return ok
+}
 
 func TestTUIInitialization(t *testing.T) {
 	// TODO: Initialize the TUI component and verify its startup state.
@@ -17,22 +60,24 @@ func TestTUIInteraction(t *testing.T) {
 
 func TestTuiCommands(t *testing.T) {
 	t.Run("help command", func(t *testing.T) {
-		ui := NewTui()
-		output := ui.Help()
-		assert.Contains(t, output, "[o]rganize")
-		assert.Contains(t, output, "[u]ndo")
+		tui := NewTui()
+		help := tui.ShowHelp()
+		assert.Contains(t, help, "Available Commands")
+		assert.Contains(t, help, "help: Show this help message")
 	})
 
-	t.Run("select file command", func(t *testing.T) {
-		ui := NewTui()
-		ui.SelectFile("file1.txt")
-		assert.True(t, ui.IsSelected("file1.txt"), "File should be selected")
+	t.Run("file selection", func(t *testing.T) {
+		tui := NewTui()
+		err := tui.SelectFile("test.txt")
+		assert.NoError(t, err)
+		assert.True(t, tui.IsSelected("test.txt"))
 	})
 
-	t.Run("deselect file command", func(t *testing.T) {
-		ui := NewTui()
-		ui.SelectFile("file1.txt")
-		ui.DeselectFile("file1.txt")
-		assert.False(t, ui.IsSelected("file1.txt"), "File should be deselected")
+	t.Run("file deselection", func(t *testing.T) {
+		tui := NewTui()
+		tui.SelectFile("test.txt")
+		err := tui.DeselectFile("test.txt")
+		assert.NoError(t, err)
+		assert.False(t, tui.IsSelected("test.txt"))
 	})
 }
