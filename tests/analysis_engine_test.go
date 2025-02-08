@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,8 +216,69 @@ func TestScanOutputFormats(t *testing.T) {
 }
 
 func TestCLIScanCommands(t *testing.T) {
-	// Skip CLI tests as they require the sortd binary to be installed
-	t.Skip("CLI tests require sortd binary")
+	// Check if binary exists in common locations
+	binaryPaths := []string{
+		"../sortd",              // Project root
+		"../../sortd",           // One level up
+		"./sortd",               // Current directory
+		os.Getenv("SORTD_PATH"), // Environment variable
+	}
+
+	var binaryPath string
+	for _, path := range binaryPaths {
+		if path != "" {
+			if _, err := os.Stat(path); err == nil {
+				binaryPath = path
+				break
+			}
+		}
+	}
+
+	if binaryPath == "" {
+		t.Skip("sortd binary not found in expected locations. Please build the binary first.")
+	}
+
+	t.Run("scan single file", func(t *testing.T) {
+		// Create a temporary test file
+		tmpDir := t.TempDir()
+		testFile := filepath.Join(tmpDir, "sample.txt")
+		err := os.WriteFile(testFile, []byte("test content"), 0644)
+		require.NoError(t, err)
+
+		output, err := exec.Command(binaryPath, "-debug", testFile).CombinedOutput()
+		require.NoError(t, err, "Command failed: %s", string(output))
+		assert.Contains(t, string(output), "text/plain")
+	})
+
+	t.Run("scan directory", func(t *testing.T) {
+		// Create a temporary test directory with files
+		tmpDir := t.TempDir()
+		testFile1 := filepath.Join(tmpDir, "sample.txt")
+		testFile2 := filepath.Join(tmpDir, "photo.jpg")
+
+		err := os.WriteFile(testFile1, []byte("test content"), 0644)
+		require.NoError(t, err)
+		err = os.WriteFile(testFile2, []byte("fake jpg content"), 0644)
+		require.NoError(t, err)
+
+		output, err := exec.Command(binaryPath, "-debug", tmpDir).CombinedOutput()
+		require.NoError(t, err, "Command failed: %s", string(output))
+		assert.Contains(t, string(output), filepath.Base(testFile1))
+		assert.Contains(t, string(output), filepath.Base(testFile2))
+	})
+
+	t.Run("dry run mode", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		output, err := exec.Command(binaryPath, "-dry-run", "-debug", tmpDir).CombinedOutput()
+		require.NoError(t, err, "Command failed: %s", string(output))
+		assert.Contains(t, string(output), "dry-run mode")
+	})
+
+	t.Run("invalid path", func(t *testing.T) {
+		output, err := exec.Command(binaryPath, "nonexistent/path/file.txt").CombinedOutput()
+		assert.Error(t, err)
+		assert.Contains(t, string(output), "no such file")
+	})
 }
 
 func TestScanEdgeCases(t *testing.T) {
@@ -234,10 +296,67 @@ func TestScanEdgeCases(t *testing.T) {
 	})
 
 	t.Run("large file handling", func(t *testing.T) {
-		// Use the existing photo.jpg as our "large" file
 		result, err := ScanFile("testdata/photo.jpg")
 		require.NoError(t, err)
 		assert.Contains(t, result.ContentType, "application/octet-stream")
 		assert.Equal(t, result.Size, int64(1024*1024)) // 1MB
+	})
+
+	t.Run("zero byte file", func(t *testing.T) {
+		emptyFile := filepath.Join(t.TempDir(), "empty.txt")
+		err := os.WriteFile(emptyFile, []byte{}, 0644)
+		require.NoError(t, err)
+
+		result, err := ScanFile(emptyFile)
+		require.NoError(t, err)
+		assert.Equal(t, int64(0), result.Size, "Should handle zero byte files")
+		assert.NotEmpty(t, result.ContentType, "Should still detect content type for empty files")
+	})
+
+	t.Run("special characters in filename", func(t *testing.T) {
+		specialFile := filepath.Join(t.TempDir(), "special!@#$%^&*.txt")
+		err := os.WriteFile(specialFile, []byte("test"), 0644)
+		require.NoError(t, err)
+
+		result, err := ScanFile(specialFile)
+		require.NoError(t, err)
+		assert.Equal(t, specialFile, result.Path, "Should handle special characters in filenames")
+	})
+
+	t.Run("directory as file", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := ScanFile(dir)
+		assert.Error(t, err, "Should error when scanning a directory as a file")
+	})
+
+	t.Run("nested symlinks", func(t *testing.T) {
+		// Create a chain of symlinks
+		baseFile := filepath.Join(t.TempDir(), "base.txt")
+		link1 := filepath.Join(t.TempDir(), "link1.txt")
+		link2 := filepath.Join(t.TempDir(), "link2.txt")
+
+		err := os.WriteFile(baseFile, []byte("test"), 0644)
+		require.NoError(t, err)
+		err = os.Symlink(baseFile, link1)
+		require.NoError(t, err)
+		err = os.Symlink(link1, link2)
+		require.NoError(t, err)
+
+		result, err := ScanFile(link2)
+		require.NoError(t, err)
+		assert.True(t, result.IsSymlink(), "Should detect nested symlinks")
+	})
+
+	t.Run("permission denied", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("Test not valid when running as root")
+		}
+
+		restrictedFile := filepath.Join(t.TempDir(), "restricted.txt")
+		err := os.WriteFile(restrictedFile, []byte("test"), 0000)
+		require.NoError(t, err)
+
+		_, err = ScanFile(restrictedFile)
+		assert.Error(t, err, "Should handle permission denied errors")
 	})
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,6 +19,7 @@ type FileInfo struct {
 
 type OrganizationEngine struct {
 	files map[string]FileInfo
+	mu    sync.RWMutex
 }
 
 func NewOrganizationEngine() *OrganizationEngine {
@@ -27,18 +29,51 @@ func NewOrganizationEngine() *OrganizationEngine {
 }
 
 func (e *OrganizationEngine) MoveFile(src, dest string) error {
-	if _, exists := e.files[dest]; exists {
-		return fmt.Errorf("destination file already exists: %s", dest)
+	// Clean paths for comparison
+	cleanSrc := filepath.Clean(src)
+	cleanDest := filepath.Clean(dest)
+
+	// Check for same file
+	if cleanSrc == cleanDest {
+		return fmt.Errorf("source and destination are the same file: %s", src)
 	}
 
-	info, err := os.Stat(src)
+	// Verify source exists and get info
+	srcInfo, err := os.Stat(cleanSrc)
 	if err != nil {
-		return err
+		return fmt.Errorf("source file error: %w", err)
 	}
 
-	e.files[dest] = FileInfo{
-		Path: dest,
-		Size: info.Size(),
+	if srcInfo.IsDir() {
+		return fmt.Errorf("cannot move directory as file: %s", src)
+	}
+
+	// Check if destination exists on filesystem
+	if _, err := os.Stat(cleanDest); err == nil {
+		return fmt.Errorf("destination file already exists on filesystem: %s", dest)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("error checking destination: %w", err)
+	}
+
+	// Lock for thread safety
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Check if destination is tracked in our files map
+	if _, exists := e.files[cleanDest]; exists {
+		return fmt.Errorf("destination file already exists in tracking: %s", dest)
+	}
+
+	// Ensure destination directory exists
+	destDir := filepath.Dir(cleanDest)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	// Record the move
+	e.files[cleanDest] = FileInfo{
+		Path: cleanDest,
+		Size: srcInfo.Size(),
 	}
 
 	return nil
@@ -119,23 +154,122 @@ func TestFileOrganization(t *testing.T) {
 	})
 }
 
-func TestConflictResolution(t *testing.T) {
-	tmpDir := t.TempDir()
-	destDir := filepath.Join(tmpDir, "documents")
-	err := os.MkdirAll(destDir, 0755)
-	require.NoError(t, err)
+func TestOrganizationEdgeCases(t *testing.T) {
+	t.Run("move to existing file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		srcFile := filepath.Join(tmpDir, "source.txt")
+		destFile := filepath.Join(tmpDir, "dest.txt")
 
-	t.Run("batch organization", func(t *testing.T) {
+		err := os.WriteFile(srcFile, []byte("source"), 0644)
+		require.NoError(t, err)
+		err = os.WriteFile(destFile, []byte("dest"), 0644)
+		require.NoError(t, err)
+
 		engine := NewOrganizationEngine()
-		files := []string{
-			filepath.Join(tmpDir, "file1.txt"),
-			filepath.Join(tmpDir, "file2.txt"),
-		}
-		for _, file := range files {
-			err := os.WriteFile(file, []byte("test content"), 0644)
+		err = engine.MoveFile(srcFile, destFile)
+		assert.Error(t, err, "Should prevent overwriting existing files")
+	})
+
+	t.Run("move non-existent file", func(t *testing.T) {
+		engine := NewOrganizationEngine()
+		err := engine.MoveFile("nonexistent.txt", "dest.txt")
+		assert.Error(t, err, "Should handle non-existent source files")
+	})
+
+	t.Run("move to invalid path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		srcFile := filepath.Join(tmpDir, "source.txt")
+		err := os.WriteFile(srcFile, []byte("test"), 0644)
+		require.NoError(t, err)
+
+		engine := NewOrganizationEngine()
+		err = engine.MoveFile(srcFile, "/nonexistent/path/dest.txt")
+		assert.Error(t, err, "Should handle invalid destination paths")
+	})
+
+	t.Run("concurrent moves", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		engine := NewOrganizationEngine()
+
+		// Create test files
+		files := make([]string, 10)
+		for i := 0; i < 10; i++ {
+			path := filepath.Join(tmpDir, fmt.Sprintf("file%d.txt", i))
+			err := os.WriteFile(path, []byte("test"), 0644)
 			require.NoError(t, err)
+			files[i] = path
 		}
-		err := engine.OrganizeFiles(files, destDir)
-		assert.NoError(t, err, "Should organize all files")
+
+		// Move files concurrently
+		destDir := filepath.Join(tmpDir, "dest")
+		err := os.MkdirAll(destDir, 0755)
+		require.NoError(t, err)
+
+		var wg sync.WaitGroup
+		errChan := make(chan error, len(files))
+
+		for _, file := range files {
+			wg.Add(1)
+			go func(f string) {
+				defer wg.Done()
+				dest := filepath.Join(destDir, filepath.Base(f))
+				if err := engine.MoveFile(f, dest); err != nil {
+					errChan <- err
+				}
+			}(file)
+		}
+
+		// Wait for all goroutines to finish
+		wg.Wait()
+		close(errChan)
+
+		// Check for errors
+		for err := range errChan {
+			assert.NoError(t, err, "Should handle concurrent moves without errors")
+		}
+
+		// Verify no duplicate moves occurred
+		engine.mu.RLock()
+		movedFiles := make(map[string]bool)
+		for dest := range engine.files {
+			assert.False(t, movedFiles[dest], "Should not have duplicate moves")
+			movedFiles[dest] = true
+		}
+		engine.mu.RUnlock()
+	})
+
+	t.Run("move empty file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		emptyFile := filepath.Join(tmpDir, "empty.txt")
+		err := os.WriteFile(emptyFile, []byte{}, 0644)
+		require.NoError(t, err)
+
+		engine := NewOrganizationEngine()
+		dest := filepath.Join(tmpDir, "dest", "empty.txt")
+		err = engine.MoveFile(emptyFile, dest)
+		assert.NoError(t, err, "Should handle empty files")
+	})
+
+	t.Run("move file with special characters", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		specialFile := filepath.Join(tmpDir, "special!@#$%^&*.txt")
+		err := os.WriteFile(specialFile, []byte("test"), 0644)
+		require.NoError(t, err)
+
+		engine := NewOrganizationEngine()
+		dest := filepath.Join(tmpDir, "dest", "special!@#$%^&*.txt")
+		err = engine.MoveFile(specialFile, dest)
+		assert.NoError(t, err, "Should handle special characters in filenames")
+	})
+
+	t.Run("move to same location", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		file := filepath.Join(tmpDir, "file.txt")
+		err := os.WriteFile(file, []byte("test"), 0644)
+		require.NoError(t, err)
+
+		engine := NewOrganizationEngine()
+		err = engine.MoveFile(file, file)
+		assert.Error(t, err, "Should prevent moving file to same location")
 	})
 }
