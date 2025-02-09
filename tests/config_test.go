@@ -62,37 +62,65 @@ func TestConfigValidation(t *testing.T) {
 }
 
 func TestConfigIntegration(t *testing.T) {
-	t.Run("organization with config", func(t *testing.T) {
-		cfg := config.NewTestConfig()
+	tmpDir := t.TempDir()
 
-		// Create test files
-		testDir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(testDir, "test.txt"), []byte("test"), 0644))
+	// Create test config
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+organize:
+  patterns:
+    - match: "*.txt"
+      target: "documents/"
+    - match: "*.jpg"
+      target: "images/"
+settings:
+  dry_run: false
+  create_dirs: true
+  backup: false
+  collision: "rename"
+directories:
+  default: "` + tmpDir + `"
+  watch:
+    - "` + tmpDir + `"
+watch_mode:
+  enabled: true
+  interval: 5
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
 
-		// Initialize organizer with config
-		organizer := organize.NewWithConfig(cfg)
-		// Test organization
-		_, err := organizer.OrganizeDir(testDir)
+	// Create test files
+	testFile := filepath.Join(tmpDir, "test.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("test content"), 0644))
+
+	// Create destination directories
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "documents"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "images"), 0755))
+
+	t.Run("organization_with_config", func(t *testing.T) {
+		cfg, err := config.LoadConfigFile(configPath)
 		require.NoError(t, err)
 
-		// Verify file was moved according to pattern
-		assert.FileExists(t, filepath.Join(testDir, "documents", "test.txt"))
+		engine := organize.New()
+		engine.SetConfig(cfg)
+
+		err = engine.OrganizeFile(testFile)
+		require.NoError(t, err)
+
+		// Verify file was moved
+		_, err = os.Stat(filepath.Join(tmpDir, "documents", "test.txt"))
+		require.NoError(t, err)
 	})
 
-	t.Run("analysis with config", func(t *testing.T) {
-		cfg := config.NewTestConfig()
-
-		// Create test file
-		testDir := t.TempDir()
-		testFile := filepath.Join(testDir, "test.txt")
-		require.NoError(t, os.WriteFile(testFile, []byte("test content"), 0644))
-
-		// Initialize analyzer with config
-		analyzer := analysis.NewWithConfig(cfg)
-
-		// Test analysis
-		result, err := analyzer.Analyze(testFile)
+	t.Run("analysis_with_config", func(t *testing.T) {
+		cfg, err := config.LoadConfigFile(configPath)
 		require.NoError(t, err)
-		assert.Equal(t, "text/plain", result.ContentType)
+
+		engine := analysis.New()
+		engine.SetConfig(cfg)
+
+		info, err := engine.Scan(testFile)
+		require.NoError(t, err)
+		assert.Equal(t, "text/plain; charset=utf-8", info.Type)
+		assert.Contains(t, info.Tags, "document")
 	})
 }

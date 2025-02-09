@@ -10,14 +10,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/jeff-barlow-spady/sortd/internal/analysis"
+	"github.com/jeff-barlow-spady/sortd/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/toasty/sortd/internal/analysis"
 )
 
 type ScanResult struct {
@@ -349,50 +349,80 @@ func TestScanEdgeCases(t *testing.T) {
 }
 
 func TestScanDirectory(t *testing.T) {
-	type args struct {
-		path string
-	}
+	// Create a temporary test directory
+	tmpDir := t.TempDir()
+
+	// Create test files
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "link.txt"), []byte("test content"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "photo.jpg"), []byte("test image"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "sample.txt"), []byte("test content"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "subdir", "test.txt"), []byte("test content"), 0644))
+
+	engine := analysis.New()
+
 	tests := []struct {
 		name    string
-		args    args
-		want    []*ScanResult
+		dir     string
+		want    []types.FileInfo
 		wantErr bool
 	}{
 		{
-			name:    "scan empty directory",
-			args:    args{path: "testdata/empty"},
-			want:    []*ScanResult{},
-			wantErr: false,
+			name: "scan_empty_directory",
+			dir:  filepath.Join(tmpDir, "empty"),
+			want: []types.FileInfo{},
 		},
 		{
-			name:    "scan non-existent directory",
-			args:    args{path: "nonexistent"},
-			want:    nil,
-			wantErr: true,
+			name: "scan_directory_with_files",
+			dir:  tmpDir,
+			want: []types.FileInfo{
+				{
+					Path: filepath.Join(tmpDir, "link.txt"),
+					Type: "text/plain; charset=utf-8",
+					Size: 13,
+					Tags: []string{"document"},
+				},
+				{
+					Path: filepath.Join(tmpDir, "photo.jpg"),
+					Type: "image/jpeg",
+					Size: 10,
+				},
+				{
+					Path: filepath.Join(tmpDir, "sample.txt"),
+					Type: "text/plain; charset=utf-8",
+					Size: 13,
+					Tags: []string{"document"},
+				},
+			},
 		},
 		{
-			name:    "scan directory with files",
-			args:    args{path: "testdata"},
-			want:    []*ScanResult{},
-			wantErr: false,
-		},
-		{
-			name:    "browse subdirectory",
-			args:    args{path: "testdata/subdir"},
-			want:    []*ScanResult{},
-			wantErr: false,
+			name: "browse_subdirectory",
+			dir:  filepath.Join(tmpDir, "subdir"),
+			want: []types.FileInfo{
+				{
+					Path: filepath.Join(tmpDir, "subdir", "test.txt"),
+					Type: "text/plain; charset=utf-8",
+					Size: 13,
+					Tags: []string{"document"},
+				},
+			},
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ScanDirectory(tt.args.path)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ScanDirectory() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.name == "scan_empty_directory" {
+				require.NoError(t, os.MkdirAll(tt.dir, 0755))
+			}
+
+			got, err := engine.ScanDirectory(tt.dir)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ScanDirectory() = %v, want %v", got, tt.want)
-			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

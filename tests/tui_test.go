@@ -67,10 +67,20 @@ type Tui struct {
 	wizardStep    WizardStep
 	showHelp      bool
 	currentDir    string
+	currentFile   string
 	wizardChoices map[string]bool
+	configPath    string
 }
 
-func (t *Tui) Update(msg string) (*Tui, tea.Cmd) {
+func (t *Tui) Update(msg tea.Msg) (*Tui, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		return t.handleKeyMsg(msg)
+	}
+	return t, nil
+}
+
+func (t *Tui) handleKeyMsg(msg tea.KeyMsg) (*Tui, tea.Cmd) {
 	newTui := &Tui{
 		selectedFiles: make(map[string]bool),
 		files:         make([]FileEntry, len(t.files)),
@@ -80,7 +90,9 @@ func (t *Tui) Update(msg string) (*Tui, tea.Cmd) {
 		cursor:        t.cursor,
 		showHelp:      t.showHelp,
 		currentDir:    t.currentDir,
+		currentFile:   t.currentFile,
 		wizardChoices: make(map[string]bool),
+		configPath:    t.configPath,
 	}
 
 	copy(newTui.files, t.files)
@@ -91,115 +103,81 @@ func (t *Tui) Update(msg string) (*Tui, tea.Cmd) {
 		newTui.wizardChoices[k] = v
 	}
 
-	switch t.mode {
-	case Setup:
-		switch t.wizardStep {
-		case WelcomeStep:
-			switch msg {
-			case "1":
-				newTui.mode = Normal
-			case "2":
-				newTui.wizardStep = ConfigStep
-			case "3":
-				newTui.wizardChoices["watch"] = true
-				newTui.wizardStep = DirectoryStep
-			case "4":
-				newTui.wizardStep = RulesStep
-			}
-		case ConfigStep:
-			switch msg {
-			case "j", "down", "↓":
-				if newTui.cursor < 3 { // Number of config options
-					newTui.cursor++
-				}
-			case "k", "up", "↑":
-				if newTui.cursor > 0 {
-					newTui.cursor--
-				}
-			case "enter":
-				newTui.wizardStep = RulesStep
-			case "esc":
-				newTui.wizardStep = WelcomeStep
-				newTui.cursor = 0
-			}
-		case DirectoryStep:
-			switch msg {
-			case "tab":
-				if info, err := os.Stat(filepath.Join(t.currentDir, "subdir")); err == nil && info.IsDir() {
-					newTui.files = append(newTui.files, FileEntry{Name: "subdir", Path: filepath.Join(t.currentDir, "subdir")})
-				}
-			case "enter":
-				if t.wizardChoices["watch"] {
-					newTui.mode = Normal
-				}
-				if len(t.files) > 0 {
-					newTui.currentDir = t.files[t.cursor].Path
-				}
-			}
+	switch msg.String() {
+	case "1":
+		newTui.mode = Normal
+	case "2":
+		newTui.wizardStep = ConfigStep
+	case "3":
+		newTui.wizardChoices["watch"] = true
+		newTui.wizardStep = DirectoryStep
+	case "4":
+		newTui.wizardStep = RulesStep
+	case "j", "down", "↓":
+		if newTui.cursor < 3 {
+			newTui.cursor++
 		}
-	case Normal:
-		switch msg {
-		case "enter", " ": // Handle both enter and space for selection
-			if len(newTui.files) > 0 {
-				file := newTui.files[newTui.cursor]
-				if newTui.selectedFiles[file.Path] {
-					delete(newTui.selectedFiles, file.Path)
-				} else {
-					newTui.selectedFiles[file.Path] = true
-				}
-			}
-		case "j", "down", "↓":
-			if newTui.cursor < len(newTui.files)-1 {
-				newTui.cursor++
-			}
-		case "k", "up", "↑":
-			if newTui.cursor > 0 {
-				newTui.cursor--
-			}
-		case "h", "left", "←":
-			// Handle directory navigation if needed
-		case "l", "right", "→":
-			// Handle directory navigation if needed
-		case "?":
-			newTui.showHelp = !t.showHelp
-		case "q", "esc":
+	case "k", "up", "↑":
+		if newTui.cursor > 0 {
+			newTui.cursor--
+		}
+	case "enter":
+		if t.wizardChoices["watch"] {
+			newTui.mode = Normal
+		} else if len(t.files) > 0 {
+			newTui.currentDir = t.files[t.cursor].Path
+		} else {
+			newTui.wizardStep = RulesStep
+		}
+	case "esc", "q":
+		if t.mode == Setup {
+			newTui.wizardStep = WelcomeStep
+			newTui.cursor = 0
+		} else {
 			return newTui, tea.Quit
 		}
+	case "tab":
+		if info, err := os.Stat(filepath.Join(t.currentDir, "subdir")); err == nil && info.IsDir() {
+			newTui.files = append(newTui.files, FileEntry{Name: "subdir", Path: filepath.Join(t.currentDir, "subdir")})
+		}
+	case "?":
+		newTui.showHelp = !t.showHelp
 	}
 
 	return newTui, nil
 }
 
 func NewTui() *Tui {
-	return &Tui{
+	tui := &Tui{
 		selectedFiles: make(map[string]bool),
 		files:         make([]FileEntry, 0),
 		wizardChoices: make(map[string]bool),
 		helpText: `Navigation:
-  j/↓, k/↑: Move cursor
-  h/←, l/→: Change directory
-  gg: Go to top
-  G: Go to bottom
+	j/↓, k/↑: Move cursor
+	h/←, l/→: Change directory
+	gg: Go to top
+	G: Go to bottom
 
 Selection:
-  space: Toggle selection
-  v: Visual mode
-  V: Visual line mode
+	space: Toggle selection
+	v: Visual mode
+	V: Visual line mode
 
 Commands:
-  q, quit: Exit
-  :: Command mode
-  /: Search
-  ?: Toggle help
+	q, quit: Exit
+	:: Command mode
+	/: Search
+	?: Toggle help
 
 Organization:
-  o: Organize selected
-  r: Refresh view`,
+	o: Organize selected
+	r: Refresh view`,
 		cursor:     0,
 		mode:       Normal,
 		wizardStep: WelcomeStep,
 		showHelp:   true,
 	}
+	return tui
 }
 
 func (t *Tui) ShowHelp() string {
@@ -846,4 +824,203 @@ func TestTuiOptionSelection(t *testing.T) {
 		newTui, _ := tui.Update(" ")
 		assert.True(t, newTui.IsSelected("test1.txt"))
 	})
+}
+
+// Add this function to create a test config
+func createTestConfig(t *testing.T, tmpDir string) string {
+	configContent := `
+organize:
+  patterns:
+    - match: "*.txt"
+      target: "documents/"
+    - match: "*.jpg"
+      target: "images/"
+settings:
+  dry_run: false
+  create_dirs: true
+  backup: false
+  collision: "rename"
+directories:
+  default: "` + tmpDir + `"
+  watch:
+    - "` + tmpDir + `"
+watch_mode:
+  enabled: true
+  interval: 5
+`
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
+	return configPath
+}
+
+// Update TestFileNavigation to use config
+func TestFileNavigation(t *testing.T) {
+	// Setup test directory structure
+	tmpDir := t.TempDir()
+	configPath := createTestConfig(t, tmpDir)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("test"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "subdir", "file3.txt"), []byte("test"), 0644))
+
+	// Update Tui initialization to use config
+	m := NewTui()
+	m.currentDir = tmpDir
+	m.configPath = configPath
+
+	tests := []struct {
+		name     string
+		keys     []string
+		wantFile string
+		wantDir  string
+	}{
+		{
+			name:     "navigate_down",
+			keys:     []string{"j"},
+			wantFile: "file2.txt",
+			wantDir:  tmpDir,
+		},
+		{
+			name:     "navigate_up",
+			keys:     []string{"j", "k"},
+			wantFile: "file1.txt",
+			wantDir:  tmpDir,
+		},
+		{
+			name:     "enter_directory",
+			keys:     []string{"tab", "enter"},
+			wantFile: "file3.txt",
+			wantDir:  filepath.Join(tmpDir, "subdir"),
+		},
+		{
+			name:     "parent_directory",
+			keys:     []string{"tab", "enter", "h"},
+			wantFile: "file1.txt",
+			wantDir:  tmpDir,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, key := range tt.keys {
+				msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+				m, _ = m.Update(msg)
+			}
+
+			assert.Equal(t, tt.wantDir, m.currentDir)
+			if tt.wantFile != "" {
+				assert.Equal(t, tt.wantFile, m.currentFile)
+			}
+		})
+	}
+}
+
+func TestFileSelection(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("test"), 0644))
+
+	tests := []struct {
+		name         string
+		keys         []string
+		wantSelected []string
+		wantNumFiles int
+	}{
+		{
+			name:         "single_selection",
+			keys:         []string{"space"},
+			wantSelected: []string{"file1.txt"},
+			wantNumFiles: 2,
+		},
+		{
+			name:         "multiple_selection",
+			keys:         []string{"space", "j", "space"},
+			wantSelected: []string{"file1.txt", "file2.txt"},
+			wantNumFiles: 2,
+		},
+		{
+			name:         "toggle_selection",
+			keys:         []string{"space", "space"},
+			wantSelected: []string{},
+			wantNumFiles: 2,
+		},
+		{
+			name:         "visual_mode_selection",
+			keys:         []string{"v", "j"},
+			wantSelected: []string{"file1.txt", "file2.txt"},
+			wantNumFiles: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewTui()
+			m.currentDir = tmpDir
+
+			for _, key := range tt.keys {
+				msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+				m, _ = m.Update(msg)
+			}
+
+			assert.Equal(t, tt.wantNumFiles, len(m.files))
+			assert.Equal(t, tt.wantSelected, m.selectedFiles)
+		})
+	}
+}
+
+func TestTabNavigation(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "dir1"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "dir2"), 0755))
+
+	tests := []struct {
+		name     string
+		keys     []string
+		wantDir  string
+		wantFile string
+	}{
+		{
+			name:    "tab_cycles_directories",
+			keys:    []string{"tab", "tab"},
+			wantDir: tmpDir,
+		},
+		{
+			name:    "tab_enter_changes_directory",
+			keys:    []string{"tab", "enter"},
+			wantDir: filepath.Join(tmpDir, "dir1"),
+		},
+		{
+			name:    "tab_escape_cancels",
+			keys:    []string{"tab", "esc"},
+			wantDir: tmpDir,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewTui()
+			m.currentDir = tmpDir
+
+			for _, key := range tt.keys {
+				var msg tea.KeyMsg
+				switch key {
+				case "tab":
+					msg = tea.KeyMsg{Type: tea.KeyTab}
+				case "enter":
+					msg = tea.KeyMsg{Type: tea.KeyEnter}
+				case "esc":
+					msg = tea.KeyMsg{Type: tea.KeyEsc}
+				default:
+					msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+				}
+				m, _ = m.Update(msg)
+			}
+
+			assert.Equal(t, tt.wantDir, m.currentDir)
+			if tt.wantFile != "" {
+				assert.Equal(t, tt.wantFile, m.currentFile)
+			}
+		})
+	}
 }

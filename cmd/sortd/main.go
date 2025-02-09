@@ -528,13 +528,19 @@ func NewWatchMode(dir string) (*WatchMode, error) {
 func (m model) View() string {
 	var s strings.Builder
 
-	// Always show current mode
-	s.WriteString(Styles.Title.Render(fmt.Sprintf("Mode: %s", m.mode)))
+	// Handle setup/wizard mode separately
+	if m.mode == Setup {
+		return m.wizardView()
+	}
+
+	// Always show banner in Normal mode
+	s.WriteString(Styles.Title.Render(banner))
+	s.WriteString("\n")
+	s.WriteString(Styles.Title.Render("Sortd File Organizer"))
 	s.WriteString("\n\n")
 
 	// Show current directory
-	s.WriteString(Styles.Title.Render(fmt.Sprintf("Directory: %s", m.currentDir)))
-	s.WriteString("\n\n")
+	s.WriteString(fmt.Sprintf("Directory: %s\n\n", m.currentDir))
 
 	// Command buffer if in command mode
 	if m.mode == Command {
