@@ -4,15 +4,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"sortd/internal/analysis"
+	"sortd/internal/config"
+	"sortd/internal/log"
+	"sortd/internal/organize"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fsnotify/fsnotify"
-	"github.com/toasty/sortd/internal/analysis"
-	"github.com/toasty/sortd/internal/config"
-	"github.com/toasty/sortd/internal/log"
-	"github.com/toasty/sortd/internal/organize"
 )
 
 // Styles defines the core UI styles
@@ -59,9 +61,9 @@ const (
 type WizardStep int
 
 const (
-	WelcomeStep WizardStep = iota
-	ConfigStep
-	DirectoryStep
+	WelcomeStep   WizardStep = iota
+	ConfigStep    WizardStep = iota
+	DirectoryStep WizardStep = iota
 	RulesStep
 	PatternsStep
 	WatchStep
@@ -69,13 +71,12 @@ const (
 )
 
 type model struct {
-	files         []FileEntry
-	selectedFiles map[string]bool
-	cursor        int
-	helpText      string
-	showHelp      bool
-	currentDir    string
-
+	files          []FileEntry
+	selectedFiles  map[string]bool
+	cursor         int
+	helpText       string
+	showHelp       bool
+	currentDir     string
 	analysisEngine *analysis.Engine
 	organizeEngine *organize.Engine
 	mode           Mode
@@ -86,61 +87,45 @@ type model struct {
 	config         *config.Config
 }
 
-// Add banner and improved initial view
-var banner = `
-:'######:::'#######::'########::'########:'########::
-'##... ##:'##.... ##: ##.... ##:... ##..:: ##.... ##:
- ##:::..:: ##:::: ##: ##:::: ##:::: ##:::: ##:::: ##:
-. ######:: ##:::: ##: ########::::: ##:::: ##:::: ##:
-:..... ##: ##:::: ##: ##.. ##:::::: ##:::: ##:::: ##:
-'##::: ##: ##:::: ##: ##::. ##::::: ##:::: ##:::: ##:
-. ######::. #######:: ##:::. ##:::: ##:::: ########::
-:......::::.......:::..:::::..:::::..:::::........:::
-
-`
-
 func initialModel() model {
-	analysisEngine := analysis.New()
-	organizeEngine := organize.New()
-
-	dir, err := os.Getwd()
+	wd, err := os.Getwd()
 	if err != nil {
-		dir = "."
+		wd = "."
 	}
-
 	m := model{
-		files:          make([]FileEntry, 0),
+		currentDir:     wd,
+		files:          []FileEntry{},
 		selectedFiles:  make(map[string]bool),
-		cursor:         0,
-		currentDir:     dir,
-		analysisEngine: analysisEngine,
-		organizeEngine: organizeEngine,
 		mode:           Setup,
-		helpText: `Navigation:
-  j/↓, k/↑: Move cursor
-  h/←, l/→: Change directory
-  gg: Go to top
-  G: Go to bottom
+		analysisEngine: analysis.New(),
+		organizeEngine: organize.New(),
+		helpText: Styles.Help.Render(`
+				Navigation:
+					j/↓, k/↑: Move cursor
+					h/←, l/→: Change directory
+					gg: Go to top
+					G: Go to bottom
 
-Selection:
-  space: Toggle selection
-  v: Visual mode
-  V: Visual line mode
+				Selection:
+					space: Toggle selection
+					v: Visual mode
+					V: Visual line mode
 
-Commands:
-  q, quit: Exit
-  :: Command mode
-  /: Search
-  ?: Toggle help
+				Commands:
+					q, quit: Exit
+					:: Command mode
+					/: Search
+					?: Toggle help
 
-Organization:
-  o: Organize selected
-  r: Refresh view`,
+				Organization:
+					o: Organize selected
+					r: Refresh view
+	`),
 		showHelp:      true,
 		wizardStep:    WelcomeStep,
 		wizardChoices: make(map[string]bool),
+		config:        config.New(),
 	}
-
 	m.scanDirectory()
 	return m
 }
@@ -162,6 +147,9 @@ func (m *model) scanDirectory() {
 			Tags:        result.Tags,
 		})
 	}
+	sort.Slice(m.files, func(i, j int) bool {
+		return m.files[i].Name < m.files[j].Name
+	})
 }
 
 func (m model) Init() tea.Cmd {
@@ -171,7 +159,7 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Global keys that work in any mode
+		// Global keys
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -180,23 +168,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Mode-specific handling
+		if m.mode == Normal {
+			// Use "tab" or "enter" to trigger directory browsing;
+			// otherwise, handle navigation (e.g. "j", "k", etc.)
+			switch msg.String() {
+			case "tab", "enter":
+				return m.handleDirectoryBrowsing(msg)
+			default:
+				return m.handleNormalMode(msg)
+			}
+		}
+
+		// Mode-specific handling for other modes.
 		var cmd tea.Cmd
 		var newModel tea.Model
 		switch m.mode {
 		case Setup:
 			newModel, cmd = m.handleSetupMode(msg)
-			m = newModel.(model)
-		case Normal:
-			newModel, cmd = m.handleNormalMode(msg)
-			m = newModel.(model)
 		case Command:
 			newModel, cmd = m.handleCommandMode(msg)
-			m = newModel.(model)
 		case Visual:
 			newModel, cmd = m.handleVisualMode(msg)
-			m = newModel.(model)
 		}
+		m = newModel.(model)
 		return m, cmd
 	}
 	return m, nil
@@ -220,6 +214,7 @@ func (m model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.currentDir != "/" {
 			parent := filepath.Dir(m.currentDir)
 			m.currentDir = parent
+			m.cursor = 0
 			m.scanDirectory()
 		}
 	case "l", "right":
@@ -228,6 +223,7 @@ func (m model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			info, err := os.Stat(file.Path)
 			if err == nil && info.IsDir() {
 				m.currentDir = file.Path
+				m.cursor = 0
 				m.scanDirectory()
 			}
 		}
@@ -238,7 +234,7 @@ func (m model) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "space":
 		if len(m.files) > 0 {
 			file := m.files[m.cursor]
-			m.selectedFiles[file.Path] = !m.selectedFiles[file.Path]
+			m.selectedFiles[file.Name] = !m.selectedFiles[file.Name]
 		}
 	}
 	return m, nil
@@ -330,76 +326,12 @@ func (m model) organizeSelected() tea.Msg {
 }
 
 func (m model) handleSetupMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch m.wizardStep {
-	case WelcomeStep:
-		switch msg.String() {
-		case "1":
-			m.mode = Normal
-			m.scanDirectory()
-			m.showHelp = true
-			return m, nil
-		case "2":
-			m.wizardStep = ConfigStep
-		case "3":
-			m.wizardChoices["watch"] = true
-			m.wizardStep = DirectoryStep
-		case "4":
-			m.showHelp = true
-			return m, nil
-		case "q", "ctrl+c":
-			return m, tea.Quit
-		}
-
-	case ConfigStep:
-		switch msg.String() {
-		case "up", "k", "↑":
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case "down", "j", "↓":
-			// Get number of config options
-			numOptions := len([]string{
-				"Default directories",
-				"Organization rules",
-				"File patterns",
-				"Watch mode settings",
-			})
-			if m.cursor < numOptions-1 {
-				m.cursor++
-			}
-		case "enter":
-			// Handle selection based on cursor position
-			switch m.cursor {
-			case 0:
-				// Handle default directories
-				m.wizardStep = DirectoryStep
-			case 1:
-				// Handle organization rules
-				m.wizardStep = ConfigStep
-			case 2:
-				// Handle file patterns
-				m.wizardStep = ConfigStep
-			case 3:
-				// Handle watch mode settings
-				m.wizardStep = WatchStep
-			}
-		case "esc":
-			m.wizardStep = WelcomeStep
-			m.cursor = 0 // Reset cursor when going back
-		}
-
-	case DirectoryStep:
-		switch msg.String() {
-		case "enter":
-			if m.wizardChoices["watch"] {
-				return m, m.initWatchMode()
-			}
-			m.wizardStep = RulesStep
-		case "tab":
-
-		case "esc":
-			m.wizardStep = WelcomeStep
-		}
+	if msg.String() == "1" && m.wizardStep == WelcomeStep {
+		m.mode = Normal
+		m.wizardStep = CompleteStep
+		m.scanDirectory()
+		m.cursor = 0
+		return m, nil
 	}
 	return m, nil
 }
@@ -445,7 +377,7 @@ type errMsg struct {
 
 func (m model) wizardView() string {
 	var s strings.Builder
-	s.WriteString(Styles.Title.Render(banner))
+	s.WriteString(Styles.Title.Render())
 	s.WriteString("\n\n")
 
 	switch m.wizardStep {
@@ -520,8 +452,9 @@ func NewWatchMode(dir string) (*WatchMode, error) {
 		return nil, fmt.Errorf("directory not specified")
 	}
 	return &WatchMode{
-		dir:   dir,
-		files: make(map[string]bool),
+		dir:    dir,
+		files:  make(map[string]bool),
+		paused: false,
 	}, nil
 }
 
@@ -534,10 +467,22 @@ func (m model) View() string {
 	}
 
 	// Always show banner in Normal mode
-	s.WriteString(Styles.Title.Render(banner))
+	s.WriteString(Styles.Title.Render(`
+                               $$\  $$\      $$\ 
+                               $$ | $  |     $$ |
+ $$$$$$$\  $$$$$$\   $$$$$$\ $$$$$$\\_/ $$$$$$$ |
+$$  _____|$$  __$$\ $$  __$$\\_$$  _|  $$  __$$ |
+\$$$$$$\  $$ /  $$ |$$ |  \__| $$ |    $$ /  $$ |
+ \____$$\ $$ |  $$ |$$ |       $$ |$$\ $$ |  $$ |
+$$$$$$$  |\$$$$$$  |$$ |       \$$$$  |\$$$$$$$ |
+\_______/  \______/ \__|        \____/  \_______|
+                                                 
+                                                 
+                                                 
+`))
 	s.WriteString("\n")
 	s.WriteString(Styles.Title.Render("Sortd File Organizer"))
-	s.WriteString("\n\n")
+	s.WriteString("\n")
 
 	// Show current directory
 	s.WriteString(fmt.Sprintf("Directory: %s\n\n", m.currentDir))
@@ -556,7 +501,7 @@ func (m model) View() string {
 			style := Styles.Unselected
 			prefix := "  "
 
-			if m.selectedFiles[file.Path] {
+			if m.selectedFiles[file.Name] {
 				style = Styles.Selected
 			}
 			if i == m.cursor {
@@ -589,19 +534,39 @@ func (m model) handleDirectoryBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.files = make([]FileEntry, 0)
+		// If any subdirectory exists, display only directories.
+		hasDir := false
 		for _, entry := range entries {
 			if entry.IsDir() {
+				hasDir = true
+				break
+			}
+		}
+		for _, entry := range entries {
+			if hasDir {
+				if entry.IsDir() {
+					m.files = append(m.files, FileEntry{
+						Name: entry.Name(),
+						Path: filepath.Join(m.currentDir, entry.Name()),
+					})
+				}
+			} else {
 				m.files = append(m.files, FileEntry{
 					Name: entry.Name(),
 					Path: filepath.Join(m.currentDir, entry.Name()),
 				})
 			}
 		}
+		sort.Slice(m.files, func(i, j int) bool {
+			return m.files[i].Name < m.files[j].Name
+		})
+		m.cursor = 0
 	case "enter":
 		if len(m.files) > 0 {
 			selected := m.files[m.cursor]
 			if info, err := os.Stat(selected.Path); err == nil && info.IsDir() {
 				m.currentDir = selected.Path
+				m.cursor = 0
 				m.scanDirectory()
 			}
 		}
@@ -610,32 +575,15 @@ func (m model) handleDirectoryBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func main() {
-	log.SetDebug(os.Getenv("DEBUG") != "")
-
-	// Handle CLI commands if provided
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "scan":
-			if err := handleScan(os.Args[2:]); err != nil {
-				fmt.Printf("Error scanning file: %v\n", err)
-				os.Exit(1)
-			}
-			return
-		}
+	// Determine if we're running in test mode.
+	testMode := os.Getenv("TESTMODE") == "true"
+	var p *tea.Program
+	if testMode {
+		// Run in test mode without alt screen by not specifying tea.WithAltScreen.
+		p = tea.NewProgram(initialModel(), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
+	} else {
+		p = tea.NewProgram(initialModel(), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	}
-
-	// Otherwise continue with existing TUI code
-	_, err := config.LoadConfig()
-	if err != nil {
-		fmt.Printf("Error loading config: %v\n", err)
-		os.Exit(1)
-	}
-
-	p := tea.NewProgram(
-		initialModel(),
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
 
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running program: %v\n", err)

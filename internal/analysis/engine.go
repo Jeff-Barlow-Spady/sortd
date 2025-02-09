@@ -7,10 +7,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
-	"github.com/toasty/sortd/internal/config"
-	"github.com/toasty/sortd/pkg/types"
+	"sortd/internal/config"
+	"sortd/pkg/types"
 )
 
 var (
@@ -36,7 +37,13 @@ func (e *ScanError) Unwrap() error {
 }
 
 // Engine handles file analysis and content detection
-type Engine struct{}
+type Engine struct {
+	config *config.Config
+}
+
+func (e *Engine) SetConfig(cfg *config.Config) {
+	e.config = cfg
+}
 
 // New creates a new Analysis Engine instance
 func New() *Engine {
@@ -69,22 +76,10 @@ func (e *Engine) Scan(path string) (*types.FileInfo, error) {
 		return nil, &ScanError{Path: path, Err: ErrInvalidInput, Context: "directory instead of file"}
 	}
 
-	contentType := "application/octet-stream"
-	file, err := os.Open(path)
+	contentType, err := e.detectContentType(path)
 	if err != nil {
-		return nil, err
+		return nil, &ScanError{Path: path, Err: err, Context: "content type detection"}
 	}
-	defer file.Close()
-
-	// Read first 512 bytes to determine content type
-	buffer := make([]byte, 512)
-	n, err := file.Read(buffer)
-	if err != nil && err != io.EOF {
-		return nil, err
-	}
-	buffer = buffer[:n]
-
-	contentType = http.DetectContentType(buffer)
 
 	result := &types.FileInfo{
 		Path:        path,
@@ -129,30 +124,40 @@ func (e *Engine) Process(path string) (*types.FileInfo, error) {
 func (e *Engine) ScanDirectory(path string) ([]*types.FileInfo, error) {
 	var results []*types.FileInfo
 
-	err := filepath.Walk(path, func(currentPath string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		result, err := e.Scan(currentPath)
-		if err != nil {
-			return err
-		}
-
-		results = append(results, result)
-		return nil
-	})
-
+	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, &ScanError{
 			Path:    path,
-			Err:     fmt.Errorf("directory scan failed: %w", err),
-			Context: "directory walk",
+			Err:     fmt.Errorf("directory read failed: %w", err),
+			Context: "os.ReadDir",
 		}
+	}
+
+	// Sort entries to ensure consistent order for tests
+	fileNames := make([]string, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			fileNames = append(fileNames, entry.Name())
+		}
+	}
+	sort.Strings(fileNames)
+
+	// Process files in sorted order
+	for _, name := range fileNames {
+		currentPath := filepath.Join(path, name)
+		result, err := e.Scan(currentPath)
+		if err != nil {
+			// Log error but continue scanning other files
+			fmt.Printf("Error scanning file %s: %v\n", currentPath, err)
+			continue
+		}
+
+		results = append(results, result)
+	}
+
+	// Return empty slice instead of nil for no results
+	if results == nil {
+		return []*types.FileInfo{}, nil
 	}
 
 	return results, nil
@@ -171,4 +176,35 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func (e *Engine) detectContentType(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	// Read first 512 bytes for detection
+	buffer := make([]byte, 512)
+	_, err = file.Read(buffer)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+
+	// Use both net/http and file extension detection
+	contentType := http.DetectContentType(buffer)
+	ext := filepath.Ext(path)
+
+	// Override for known image types
+	if strings.HasPrefix(contentType, "application/octet-stream") {
+		switch ext {
+		case ".jpg", ".jpeg":
+			return "image/jpeg", nil
+		case ".png":
+			return "image/png", nil
+		}
+	}
+
+	return contentType, nil
 }

@@ -5,7 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/toasty/sortd/pkg/types"
+	"sortd/pkg/types"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -225,4 +226,10 @@ func NewTestConfig() *Config {
 	cfg.Settings.Collision = "rename"
 	cfg.WatchMode.Interval = 5
 	return cfg
+}
+
+// NewDefaultConfig creates a new configuration instance with default values.
+// This is simply an alias for New().
+func New() *Config {
+	return defaultConfig()
 }

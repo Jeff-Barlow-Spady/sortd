@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/toasty/sortd/internal/analysis"
-	"github.com/toasty/sortd/internal/config"
-	"github.com/toasty/sortd/internal/organize"
+	"sortd/internal/analysis"
+	"sortd/internal/config"
+	"sortd/internal/organize"
 )
 
 func TestConfigValidation(t *testing.T) {
@@ -88,14 +88,34 @@ watch_mode:
 `
 	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
 
-	// Create test files
-	testFile := filepath.Join(tmpDir, "test.txt")
-	require.NoError(t, os.WriteFile(testFile, []byte("test content"), 0644))
-
 	// Create destination directories
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "documents"), 0755))
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "images"), 0755))
 
+	// Create test file
+	testFile := filepath.Join(tmpDir, "test.txt")
+	testContent := []byte("test content")
+	require.NoError(t, os.WriteFile(testFile, testContent, 0644))
+
+	// First run analysis
+	t.Run("analysis_with_config", func(t *testing.T) {
+		cfg, err := config.LoadConfigFile(configPath)
+		require.NoError(t, err)
+
+		engine := analysis.New()
+		engine.SetConfig(cfg)
+
+		// Verify file exists before analysis
+		_, err = os.Stat(testFile)
+		require.NoError(t, err, "Test file should exist before analysis")
+
+		info, err := engine.Scan(testFile)
+		require.NoError(t, err)
+		assert.Equal(t, "text/plain; charset=utf-8", info.ContentType)
+		assert.Contains(t, info.Tags, "document")
+	})
+
+	// Then run organization
 	t.Run("organization_with_config", func(t *testing.T) {
 		cfg, err := config.LoadConfigFile(configPath)
 		require.NoError(t, err)
@@ -107,20 +127,13 @@ watch_mode:
 		require.NoError(t, err)
 
 		// Verify file was moved
-		_, err = os.Stat(filepath.Join(tmpDir, "documents", "test.txt"))
-		require.NoError(t, err)
-	})
-
-	t.Run("analysis_with_config", func(t *testing.T) {
-		cfg, err := config.LoadConfigFile(configPath)
+		movedFile := filepath.Join(tmpDir, "documents", "test.txt")
+		_, err = os.Stat(movedFile)
 		require.NoError(t, err)
 
-		engine := analysis.New()
-		engine.SetConfig(cfg)
-
-		info, err := engine.Scan(testFile)
+		// Verify content was preserved
+		content, err := os.ReadFile(movedFile)
 		require.NoError(t, err)
-		assert.Equal(t, "text/plain; charset=utf-8", info.Type)
-		assert.Contains(t, info.Tags, "document")
+		assert.Equal(t, testContent, content)
 	})
 }

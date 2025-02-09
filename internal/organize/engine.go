@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/toasty/sortd/internal/config"
-	"github.com/toasty/sortd/internal/log"
-	"github.com/toasty/sortd/pkg/types"
+	"sortd/internal/config"
+	"sortd/internal/log"
+	"sortd/pkg/types"
 )
 
 // Engine handles file organization operations
@@ -21,15 +21,55 @@ type Engine struct {
 	createDirs bool
 	backup     bool
 	collision  string
+	config     *config.Config
+}
+
+func (e *Engine) SetConfig(cfg *config.Config) {
+	e.patterns = cfg.Organize.Patterns
+	e.createDirs = cfg.Settings.CreateDirs
+	e.backup = cfg.Settings.Backup
+	e.collision = cfg.Settings.Collision
+	e.config = cfg
+}
+
+func (e *Engine) OrganizeFile(path string) error {
+	if e.config == nil {
+		return fmt.Errorf("no config set")
+	}
+
+	// Get file info
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
+	// Find matching pattern
+	for _, pattern := range e.config.Organize.Patterns {
+		matched, err := filepath.Match(pattern.Match, info.Name())
+		if err != nil {
+			return err
+		}
+		if matched {
+			// Create target directory if needed
+			targetDir := filepath.Join(filepath.Dir(path), pattern.Target)
+			if e.config.Settings.CreateDirs {
+				if err := os.MkdirAll(targetDir, 0755); err != nil {
+					return err
+				}
+			}
+
+			// Move file
+			newPath := filepath.Join(targetDir, info.Name())
+			return os.Rename(path, newPath)
+		}
+	}
+
+	return nil
 }
 
 // New creates a new Organization Engine instance
 func New() *Engine {
-	return &Engine{
-		files:    make(map[string]types.FileInfo),
-		patterns: make([]types.Pattern, 0),
-		dryRun:   false,
-	}
+	return &Engine{}
 }
 
 // NewWithConfig creates a new Organization Engine instance with configuration
@@ -41,6 +81,7 @@ func NewWithConfig(cfg *config.Config) *Engine {
 		createDirs: cfg.Settings.CreateDirs,
 		backup:     cfg.Settings.Backup,
 		collision:  cfg.Settings.Collision,
+		config:     cfg,
 	}
 }
 
