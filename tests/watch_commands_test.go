@@ -1,9 +1,9 @@
 package tests
 
 import (
-	"testing"
 	"fmt"
 	"os"
+	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,7 +80,7 @@ func TestWatchModeInitialization(t *testing.T) {
 	t.Run("valid directory", func(t *testing.T) {
 		// Create a temporary directory for testing
 		tmpDir := t.TempDir()
-		
+		t.Logf("tmpDir: %s", tmpDir)
 		wm, err := NewWatchMode(tmpDir)
 		require.NoError(t, err)
 		assert.NotNil(t, wm)

@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
-// FileInfo represents metadata about a file in the system
+// FileInfo represents analyzed file information
 type FileInfo struct {
 	Path        string   `json:"path"`
 	ContentType string   `json:"type"`
@@ -15,27 +16,32 @@ type FileInfo struct {
 	Tags        []string `json:"tags,omitempty"`
 }
 
-// ToJSON converts a FileInfo to JSON format
-func (fi *FileInfo) ToJSON() string {
-	jsonBytes, _ := json.Marshal(fi)
+// Name returns the base name of the file
+func (f *FileInfo) Name() string {
+	return filepath.Base(f.Path)
+}
+
+// ToJSON converts FileInfo to JSON string
+func (f *FileInfo) ToJSON() string {
+	jsonBytes, _ := json.Marshal(f)
 	return string(jsonBytes)
 }
 
-// String converts a FileInfo to a human-readable format
-func (fi *FileInfo) String() string {
+// String returns a human-readable representation
+func (f *FileInfo) String() string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("File: %s\n", fi.Path))
-	sb.WriteString(fmt.Sprintf("Type: %s\n", fi.ContentType))
-	sb.WriteString(fmt.Sprintf("Size: %d bytes\n", fi.Size))
-	if len(fi.Tags) > 0 {
-		sb.WriteString(fmt.Sprintf("Tags: %s\n", strings.Join(fi.Tags, ", ")))
+	sb.WriteString(fmt.Sprintf("File: %s\n", f.Path))
+	sb.WriteString(fmt.Sprintf("Type: %s\n", f.ContentType))
+	sb.WriteString(fmt.Sprintf("Size: %d bytes\n", f.Size))
+	if len(f.Tags) > 0 {
+		sb.WriteString(fmt.Sprintf("Tags: %s\n", strings.Join(f.Tags, ", ")))
 	}
 	return sb.String()
 }
 
 // IsSymlink checks if the file is a symbolic link
-func (fi *FileInfo) IsSymlink() bool {
-	info, err := os.Lstat(fi.Path)
+func (f *FileInfo) IsSymlink() bool {
+	info, err := os.Lstat(f.Path)
 	if err != nil {
 		return false
 	}

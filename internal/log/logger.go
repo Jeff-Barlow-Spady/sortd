@@ -29,13 +29,27 @@ func Info(format string, args ...interface{}) {
 	logger.log("INFO", format, args...)
 }
 
-func Debug(format string, args ...interface{}) {
+// Debug logs a message with arguments
+func Debug(msg string, args ...interface{}) {
+	if isDebug {
+		logger.log("DEBUG", msg+": %v", args...)
+	}
+}
+
+// Debugf logs a formatted message
+func Debugf(format string, args ...interface{}) {
 	if isDebug {
 		logger.log("DEBUG", format, args...)
 	}
 }
 
-func Error(format string, args ...interface{}) {
+// Error logs an error message with arguments
+func Error(msg string, args ...interface{}) {
+	logger.log("ERROR", msg+": %v", args...)
+}
+
+// Errorf logs a formatted error message
+func Errorf(format string, args ...interface{}) {
 	logger.log("ERROR", format, args...)
 }
 

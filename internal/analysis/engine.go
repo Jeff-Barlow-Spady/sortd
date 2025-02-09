@@ -2,16 +2,38 @@ package analysis
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/toasty/sortd/internal/config"
 	"github.com/toasty/sortd/pkg/types"
 )
 
-var ErrFileNotFound = errors.New("file not found")
+var (
+	ErrFileNotFound      = errors.New("file not found")
+	ErrPermissionDenied  = errors.New("permission denied")
+	ErrInvalidFileType   = errors.New("invalid file type")
+	ErrUnsupportedFormat = errors.New("unsupported file format")
+	ErrInvalidInput      = errors.New("invalid input")
+)
+
+type ScanError struct {
+	Path    string
+	Err     error
+	Context string
+}
+
+func (e *ScanError) Error() string {
+	return fmt.Sprintf("analysis error at %s: %v (context: %s)", e.Path, e.Err, e.Context)
+}
+
+func (e *ScanError) Unwrap() error {
+	return e.Err
+}
 
 // Engine handles file analysis and content detection
 type Engine struct{}
@@ -21,14 +43,30 @@ func New() *Engine {
 	return &Engine{}
 }
 
-// Scan performs basic file analysis without additional processing
+// NewWithConfig creates a new Analysis Engine instance with config settings
+func NewWithConfig(cfg *config.Config) *Engine {
+	return &Engine{}
+}
+
+// Scan performs basic file analysis
 func (e *Engine) Scan(path string) (*types.FileInfo, error) {
+	if path == "" {
+		return nil, &ScanError{Path: path, Err: ErrInvalidInput, Context: "empty path"}
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, ErrFileNotFound
+			return nil, &ScanError{Path: path, Err: ErrFileNotFound, Context: "file existence check"}
 		}
-		return nil, err
+		if os.IsPermission(err) {
+			return nil, &ScanError{Path: path, Err: ErrPermissionDenied, Context: "file permissions"}
+		}
+		return nil, &ScanError{Path: path, Err: fmt.Errorf("filesystem error: %w", err), Context: "stat operation"}
+	}
+
+	if info.IsDir() {
+		return nil, &ScanError{Path: path, Err: ErrInvalidInput, Context: "directory instead of file"}
 	}
 
 	contentType := "application/octet-stream"
@@ -65,7 +103,7 @@ func (e *Engine) Scan(path string) (*types.FileInfo, error) {
 	return result, nil
 }
 
-// Process performs file analysis with additional processing and tagging
+// Process performs file analysis with additional processing
 func (e *Engine) Process(path string) (*types.FileInfo, error) {
 	result, err := e.Scan(path)
 	if err != nil {
@@ -91,26 +129,39 @@ func (e *Engine) Process(path string) (*types.FileInfo, error) {
 func (e *Engine) ScanDirectory(path string) ([]*types.FileInfo, error) {
 	var results []*types.FileInfo
 
-	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+	err := filepath.Walk(path, func(currentPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !info.IsDir() {
-			result, err := e.Scan(filePath)
-			if err != nil {
-				return err
-			}
-			results = append(results, result)
+		if info.IsDir() {
+			return nil
 		}
+
+		result, err := e.Scan(currentPath)
+		if err != nil {
+			return err
+		}
+
+		results = append(results, result)
 		return nil
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, &ScanError{
+			Path:    path,
+			Err:     fmt.Errorf("directory scan failed: %w", err),
+			Context: "directory walk",
+		}
 	}
 
 	return results, nil
+}
+
+// Analyze performs additional analysis on a file
+func (e *Engine) Analyze(path string) (*types.FileInfo, error) {
+	// Implementation here
+	return nil, nil
 }
 
 func contains(slice []string, item string) bool {

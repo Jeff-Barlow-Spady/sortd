@@ -7,16 +7,20 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/toasty/sortd/internal/config"
 	"github.com/toasty/sortd/internal/log"
 	"github.com/toasty/sortd/pkg/types"
 )
 
 // Engine handles file organization operations
 type Engine struct {
-	files    map[string]types.FileInfo
-	patterns []types.Pattern
-	dryRun   bool
-	mu       sync.RWMutex // Protects files map
+	files      map[string]types.FileInfo
+	patterns   []types.Pattern
+	dryRun     bool
+	mu         sync.RWMutex // Protects files map
+	createDirs bool
+	backup     bool
+	collision  string
 }
 
 // New creates a new Organization Engine instance
@@ -25,6 +29,18 @@ func New() *Engine {
 		files:    make(map[string]types.FileInfo),
 		patterns: make([]types.Pattern, 0),
 		dryRun:   false,
+	}
+}
+
+// NewWithConfig creates a new Organization Engine instance with configuration
+func NewWithConfig(cfg *config.Config) *Engine {
+	return &Engine{
+		files:      make(map[string]types.FileInfo),
+		patterns:   cfg.Organize.Patterns,
+		dryRun:     cfg.Settings.DryRun,
+		createDirs: cfg.Settings.CreateDirs,
+		backup:     cfg.Settings.Backup,
+		collision:  cfg.Settings.Collision,
 	}
 }
 
@@ -162,4 +178,11 @@ func (e *Engine) OrganizeByPatterns(files []string) error {
 		}
 	}
 	return nil
+}
+
+// Add directory organization method
+func (e *Engine) OrganizeDir(dir string) ([]string, error) {
+	var organized []string
+	// Implementation here
+	return organized, nil
 }

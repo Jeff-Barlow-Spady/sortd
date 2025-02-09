@@ -73,7 +73,6 @@ func (e *OrganizationEngine) MoveFile(src, dest string) error {
 	// Record the move
 	e.files[cleanDest] = FileInfo{
 		Path: cleanDest,
-		Size: srcInfo.Size(),
 	}
 
 	return nil
