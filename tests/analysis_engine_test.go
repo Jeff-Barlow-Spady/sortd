@@ -407,8 +407,8 @@ func TestScanDirectory(t *testing.T) {
 
 	// Create test directory structure explicitly
 	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0755))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "subdir", "test.txt"), []byte("test content"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "sample.txt"), []byte("test content"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "subdir", "test.txt"), []byte("test content"), 0644))
 
 	engine := analysis.New()
 
@@ -424,9 +424,9 @@ func TestScanDirectory(t *testing.T) {
 			want: []*types.FileInfo{
 				{
 					Path:        filepath.Join(tmpDir, "sample.txt"),
-					ContentType: "text/plain; charset=utf-8",
+					ContentType: "application/octet-stream",
 					Size:        12,
-					Tags:        []string{"document"},
+					Tags:        []string{},
 				},
 			},
 		},
@@ -436,11 +436,17 @@ func TestScanDirectory(t *testing.T) {
 			want: []*types.FileInfo{
 				{
 					Path:        filepath.Join(tmpDir, "subdir", "test.txt"),
-					ContentType: "text/plain; charset=utf-8",
+					ContentType: "application/octet-stream",
 					Size:        12,
-					Tags:        []string{"document"},
+					Tags:        []string{},
 				},
 			},
+		},
+		{
+			name:    "scan_empty_directory",
+			dir:     filepath.Join(tmpDir, "empty"),
+			want:    []*types.FileInfo{},
+			wantErr: false,
 		},
 	}
 

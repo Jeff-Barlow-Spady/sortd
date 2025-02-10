@@ -9,6 +9,7 @@ var Theme = struct {
 	Selected   lipgloss.Style
 	Unselected lipgloss.Style
 	Help       lipgloss.Style
+	Subtle     lipgloss.Style
 }{
 	App: lipgloss.NewStyle().
 		Padding(1, 2),
@@ -23,4 +24,6 @@ var Theme = struct {
 		Foreground(lipgloss.Color("#666666")),
 	Help: lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#5A9")),
+	Subtle: lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#666666")),
 }
