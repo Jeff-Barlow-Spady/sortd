@@ -44,14 +44,14 @@ func (e *Engine) OrganizeFile(path string) error {
 	}
 
 	// Find matching pattern
-	for _, pattern := range e.config.Organize.Patterns {
-		matched, err := filepath.Match(pattern.Match, info.Name())
+	for _, pattern := range e.patterns {
+		matched, err := filepath.Match(pattern.Glob, info.Name())
 		if err != nil {
 			return err
 		}
 		if matched {
 			// Create target directory if needed
-			targetDir := filepath.Join(filepath.Dir(path), pattern.Target)
+			targetDir := filepath.Join(filepath.Dir(path), pattern.DestDir)
 			if e.config.Settings.CreateDirs {
 				if err := os.MkdirAll(targetDir, 0755); err != nil {
 					return err

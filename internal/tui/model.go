@@ -1,12 +1,21 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"sortd/internal/tui/common"
+	"sortd/internal/tui/messages"
 	"sortd/internal/tui/views"
 	"strings"
+
+	"sortd/internal/analysis"
+	"sortd/internal/config"
+	"sortd/internal/organize"
+
+	"sortd/internal/tui/components"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -30,11 +39,28 @@ type Model struct {
 	visualStart int
 	visualEnd   int
 	visualMode  bool
+
+	analysisEngine *analysis.Engine
+	organizeEngine *organize.Engine
+	config         *config.Config
+
+	// New fields for the new functionality
+	menuChoice   int
+	configChoice int
+	directorySet bool
+
+	fileBrowser  *components.FileBrowser
+	configEditor *components.ConfigEditor
+	statusBar    *components.StatusBar
 }
 
 // Init implements tea.Model
 func (m *Model) Init() tea.Cmd {
-	return nil
+	// Make sure we're not waiting on anything here
+	return tea.Batch(
+		m.fileBrowser.Init(),
+		m.configEditor.Init(),
+	)
 }
 
 func New() *Model {
@@ -43,13 +69,20 @@ func New() *Model {
 		wd = "."
 	}
 
-	return &Model{
-		selectedFiles: make(map[string]bool),
-		mode:          common.Normal,
-		currentDir:    wd,
-		currentFile:   "",
-		showHelp:      false,
+	m := &Model{
+		selectedFiles:  make(map[string]bool),
+		mode:           common.Normal,
+		currentDir:     wd,
+		currentFile:    "",
+		showHelp:       false,
+		analysisEngine: analysis.New(),
+		organizeEngine: organize.New(),
+		config:         config.New(),
+		fileBrowser:    components.NewFileBrowser(),
+		configEditor:   components.NewConfigEditor(config.New()),
+		statusBar:      components.NewStatusBar(),
 	}
+	return m
 }
 
 // View implements tea.Model
@@ -59,11 +92,33 @@ func (m *Model) View() string {
 
 // Update implements tea.Model
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	fmt.Println("Model.Update called with message type:", reflect.TypeOf(msg))
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.fileBrowser.SetSize(msg.Width, msg.Height)
+	case messages.ConfigUpdateMsg:
+		m.config = msg.Config
+		m.statusBar.SetText("Configuration saved")
+	case messages.ErrorMsg:
+		m.statusBar.SetText("Error: " + msg.Err.Error())
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
 	}
-	return m, nil
+
+	// Update components
+	if cmd := m.fileBrowser.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.configEditor.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.statusBar.Update(msg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -78,20 +133,30 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) copy() *Model {
+	fmt.Println("Starting Model.copy()")
 	newModel := &Model{
-		selectedFiles: make(map[string]bool),
-		files:         make([]common.FileEntry, len(m.files)),
-		mode:          m.mode,
-		cursor:        m.cursor,
-		showHelp:      m.showHelp,
-		currentDir:    m.currentDir,
-		currentFile:   m.currentFile,
-		commandBuffer: m.commandBuffer,
-		statusMsg:     m.statusMsg,
-		lastKey:       m.lastKey,
-		visualMode:    m.visualMode,
-		visualStart:   m.visualStart,
-		visualEnd:     m.visualEnd,
+		selectedFiles:  make(map[string]bool),
+		files:          make([]common.FileEntry, len(m.files)),
+		mode:           m.mode,
+		cursor:         m.cursor,
+		showHelp:       m.showHelp,
+		currentDir:     m.currentDir,
+		currentFile:    m.currentFile,
+		commandBuffer:  m.commandBuffer,
+		statusMsg:      m.statusMsg,
+		lastKey:        m.lastKey,
+		visualMode:     m.visualMode,
+		visualStart:    m.visualStart,
+		visualEnd:      m.visualEnd,
+		analysisEngine: m.analysisEngine,
+		organizeEngine: m.organizeEngine,
+		config:         m.config,
+		menuChoice:     m.menuChoice,
+		configChoice:   m.configChoice,
+		directorySet:   m.directorySet,
+		fileBrowser:    m.fileBrowser,
+		configEditor:   m.configEditor,
+		statusBar:      m.statusBar,
 	}
 
 	copy(newModel.files, m.files)
@@ -99,11 +164,12 @@ func (m *Model) copy() *Model {
 		newModel.selectedFiles[k] = v
 	}
 
+	fmt.Println("Finished Model.copy()")
 	return newModel
 }
 
 func (m *Model) handleNormalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	newModel := New()
+	newModel := m.copy()
 
 	switch msg.String() {
 	case "esc":
@@ -176,6 +242,22 @@ func (m *Model) handleNormalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		newModel.showHelp = !newModel.showHelp
 	case "q":
 		return newModel, tea.Quit
+	case "1", "2", "3", "4", "5", "6":
+		if m.currentDir == "" {
+			choice := int(msg.String()[0] - '0')
+			switch choice {
+			case 1: // Browse & Organize
+				return m.handleBrowseMode()
+			case 2: // Configure Rules
+				return m.handleConfigRules()
+			case 3: // Configure Patterns
+				return m.handleConfigPatterns()
+			case 4: // Analysis Report
+				return m.handleAnalysis()
+			case 5: // Watch Directory
+				return m.handleWatchMode()
+			}
+		}
 	}
 
 	newModel.lastKey = msg.String()
@@ -301,4 +383,78 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// OrganizeSelected organizes the selected files
+func (m *Model) OrganizeSelected() tea.Cmd {
+	return func() tea.Msg {
+		var filesToOrganize []string
+		for path := range m.selectedFiles {
+			filesToOrganize = append(filesToOrganize, path)
+		}
+
+		if err := m.organizeEngine.OrganizeFiles(filesToOrganize, m.currentDir); err != nil {
+			return messages.ErrorMsg{Err: err}
+		}
+
+		m.selectedFiles = make(map[string]bool)
+		m.scanDirectory()
+		return nil
+	}
+}
+
+func (m *Model) handleBrowseMode() (tea.Model, tea.Cmd) {
+	newModel := m.copy()
+	// Start in home directory if none selected
+	if newModel.currentDir == "" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			newModel.currentDir = home
+		} else {
+			newModel.currentDir = "."
+		}
+	}
+	newModel.scanDirectory()
+	return newModel, nil
+}
+
+func (m *Model) handleConfigRules() (tea.Model, tea.Cmd) {
+	newModel := m.copy()
+	// Comment out or remove the unused variable
+	// Rules := newModel.config.Organize.Patterns
+	// ... implement rules editor view
+	return newModel, nil
+}
+
+func (m *Model) handleConfigPatterns() (tea.Model, tea.Cmd) {
+	newModel := m.copy()
+	// Comment out or remove the unused variable
+	// Patterns := newModel.config.Organize.Patterns
+	// ... implement pattern editor view
+	return newModel, nil
+}
+
+func (m *Model) handleAnalysis() (tea.Model, tea.Cmd) {
+	newModel := m.copy()
+	return newModel, func() tea.Msg {
+		if m.currentDir == "" {
+			return messages.ErrorMsg{Err: fmt.Errorf("no directory selected")}
+		}
+		results, err := m.analysisEngine.ScanDirectory(m.currentDir)
+		if err != nil {
+			return messages.ErrorMsg{Err: err}
+		}
+		return messages.AnalysisCompleteMsg{Results: results}
+	}
+}
+
+func (m *Model) handleWatchMode() (tea.Model, tea.Cmd) {
+	newModel := m.copy()
+	if newModel.currentDir == "" {
+		return newModel, func() tea.Msg {
+			return messages.ErrorMsg{Err: fmt.Errorf("please select a directory first")}
+		}
+	}
+	// Enable watch mode on current directory
+	return newModel, nil
 }

@@ -52,7 +52,7 @@ func New() *Engine {
 
 // NewWithConfig creates a new Analysis Engine instance with config settings
 func NewWithConfig(cfg *config.Config) *Engine {
-	return &Engine{}
+	return &Engine{config: cfg}
 }
 
 // Scan performs basic file analysis

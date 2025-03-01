@@ -1,10 +1,10 @@
 package views
 
 import (
-	"fmt"
 	"strings"
 
 	"sortd/internal/tui/common"
+	"sortd/internal/tui/components"
 	"sortd/internal/tui/styles"
 )
 
@@ -13,50 +13,23 @@ import (
 func RenderMainView(m common.ModelReader) string {
 	var sb strings.Builder
 
-	// Render title banner
-	sb.WriteString(styles.Theme.Title.Render(`
-	::######:::'#######::'########::'########:'########::
-	'##... ##:'##.... ##: ##.... ##:... ##..:: ##.... ##:
-	'##:::..:: ##:::: ##: ##:::: ##:::: ##:::: ##:::: ##:
-	. ######:: ##:::: ##: ########::::: ##:::: ##:::: ##:
-	:..... ##: ##:::: ##: ##.. ##:::::: ##:::: ##:::: ##:
-	'##::: ##: ##:::: ##: ##::. ##::::: ##:::: ##:::: ##:
-	. ######::. #######:: ##:::. ##:::: ##:::: ########::
-	:......::::.......:::..:::::..:::::..:::::........:::
-	`))
-	sb.WriteString("\n")
+	// Render banner
+	sb.WriteString(renderBanner())
 
-	// Main menu
-	if m.Mode() == common.Normal && m.CurrentDir() == "" {
-		sb.WriteString(styles.Theme.Title.Render("Main Menu\n\n"))
-		sb.WriteString("1. Quick Start - Organize Files\n")
-		sb.WriteString("2. Setup Configuration\n")
-		sb.WriteString("3. Watch Mode (Coming Soon)\n")
-		sb.WriteString("4. Show Help\n\n")
+	// Render file list or main menu
+	if m.Mode() == common.Normal && m.CurrentDir() != "" {
+		fileList := components.NewFileList()
+		fileList.SetFiles(m.Files())
+		sb.WriteString(fileList.View())
 	} else {
-		// File list view
-		for i, file := range m.Files() {
-			style := styles.Theme.Unselected
-			if m.IsSelected(file.Name) {
-				style = styles.Theme.Selected
-			}
-
-			cursor := " "
-			if i == m.Cursor() {
-				cursor = ">"
-			}
-
-			sb.WriteString(fmt.Sprintf("%s %s\n", cursor, style.Render(file.Name)))
-		}
+		sb.WriteString(renderMainMenu())
 	}
 
-	// Show detailed help if enabled
+	// Help and key commands
 	if m.ShowHelp() {
 		sb.WriteString("\n" + RenderHelp())
 	}
-
-	// Always show key commands at bottom
-	sb.WriteString("\n" + styles.Theme.Help.Render(RenderKeyCommands()))
+	sb.WriteString("\n" + RenderKeyCommands())
 
 	return styles.Theme.App.Render(sb.String())
 }
@@ -72,4 +45,32 @@ func RenderHelp() string {
 Quick Start Guide:
 ...
 `)
+}
+
+func renderBanner() string {
+	return styles.Theme.Title.Render(`
+	::######:::'#######::'########::'########:'########::
+	'##... ##:'##.... ##: ##.... ##:... ##..:: ##.... ##:
+	'##:::..:: ##:::: ##: ##:::: ##:::: ##:::: ##:::: ##:
+	. ######:: ##:::: ##: ########::::: ##:::: ##:::: ##:
+	:..... ##: ##:::: ##: ##.. ##:::::: ##:::: ##:::: ##:
+	'##::: ##: ##:::: ##: ##::. ##::::: ##:::: ##:::: ##:
+	. ######::. #######:: ##:::. ##:::: ##:::: ########::
+	:......::::.......:::..:::::..:::::..:::::........:::
+	`)
+}
+
+func renderMainMenu() string {
+	var s strings.Builder
+	s.WriteString(styles.Theme.Title.Render("Main Menu\n\n"))
+	s.WriteString("1. Browse & Organize Files\n")
+	s.WriteString("2. Configure Organization Rules\n")
+	s.WriteString("3. Configure File Patterns\n")
+	s.WriteString("4. View Analysis Report\n")
+	s.WriteString("5. Watch Directory\n")
+	s.WriteString("6. Show Help\n\n")
+	s.WriteString("\nCurrent Config:\n")
+	s.WriteString("  Directory: " + styles.Theme.Help.Render("(none selected)") + "\n")
+	s.WriteString("  Patterns: " + styles.Theme.Help.Render("(default)") + "\n")
+	return s.String()
 }
