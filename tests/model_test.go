@@ -104,12 +104,14 @@ func TestModelStateConsistency(t *testing.T) {
 		m.SetCurrentDir(tmpDir)
 		require.NoError(t, m.ScanDirectory())
 
-		// Select a file
-		m.IsSelected("test.txt")
+		// Select a file using spacebar key
+		model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+		m = model.(*tui.Model)
+		assert.True(t, m.IsSelected("test.txt"), "File should be selected after pressing spacebar")
 
 		// Navigate
-		model, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-		assert.True(t, model.(*tui.Model).IsSelected("test.txt"))
+		model, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		assert.True(t, model.(*tui.Model).IsSelected("test.txt"), "Selection should persist after navigation")
 	})
 
 	t.Run("cursor_file_sync", func(t *testing.T) {

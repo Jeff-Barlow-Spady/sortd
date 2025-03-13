@@ -133,30 +133,27 @@ func defaultConfig() *Config {
 	return cfg
 }
 
-// SaveConfig saves the configuration to the default location.
-// Creates the config directory if it doesn't exist.
-func SaveConfig(cfg *Config) error {
-	if cfg == nil {
-		return fmt.Errorf("nil config")
+// SaveConfig saves the configuration to the specified file.
+// It creates parent directories if they don't exist.
+func SaveConfig(cfg *Config, path string) error {
+	// Create parent directories if they don't exist
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-
-	configDir := filepath.Join(home, ".config", "sortd")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return err
-	}
-
-	configPath := filepath.Join(configDir, "config.yaml")
+	// Marshal the config to YAML
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	return os.WriteFile(configPath, data, 0644)
+	// Write the data to the file
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	return nil
 }
 
 // Validate checks if the configuration is valid.
