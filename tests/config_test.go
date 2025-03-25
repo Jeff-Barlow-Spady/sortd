@@ -23,10 +23,11 @@ func TestConfigValidation(t *testing.T) {
 			name: "valid config",
 			config: &config.Config{
 				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
+					DryRun                 bool   `yaml:"dry_run"`
+					CreateDirs             bool   `yaml:"create_dirs"`
+					Backup                 bool   `yaml:"backup"`
+					Collision              string `yaml:"collision"`
+					ImprovedCategorization bool   `yaml:"improved_categorization"`
 				}{
 					Collision: "rename",
 				},
@@ -37,10 +38,11 @@ func TestConfigValidation(t *testing.T) {
 			name: "invalid collision",
 			config: &config.Config{
 				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
+					DryRun                 bool   `yaml:"dry_run"`
+					CreateDirs             bool   `yaml:"create_dirs"`
+					Backup                 bool   `yaml:"backup"`
+					Collision              string `yaml:"collision"`
+					ImprovedCategorization bool   `yaml:"improved_categorization"`
 				}{
 					Collision: "invalid",
 				},

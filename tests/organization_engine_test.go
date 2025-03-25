@@ -9,6 +9,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"sortd/internal/config"
+	"sortd/internal/organize"
+	"sortd/pkg/types"
+	"sortd/tests/testutils"
 )
 
 type FileInfo struct {
@@ -270,5 +275,182 @@ func TestOrganizationEdgeCases(t *testing.T) {
 		engine := NewOrganizationEngine()
 		err = engine.MoveFile(file, file)
 		assert.Error(t, err, "Should prevent moving file to same location")
+	})
+}
+
+// TestOrganizationEngine tests the actual organization engine implementation
+func TestOrganizationEngine(t *testing.T) {
+	// Create temp test directory
+	tmpDir := t.TempDir()
+
+	// Create a test file
+	testFile := filepath.Join(tmpDir, "test.txt")
+	err := os.WriteFile(testFile, []byte("test content"), 0644)
+	require.NoError(t, err, "Failed to create test file")
+
+	// Create destination directory
+	destDir := filepath.Join(tmpDir, "documents")
+	err = os.MkdirAll(destDir, 0755)
+	require.NoError(t, err, "Failed to create destination directory")
+
+	// Create an instance of the actual organization engine
+	engine := organize.New()
+
+	// Configure the engine
+	cfg := &config.Config{}
+	cfg.Settings.CreateDirs = true
+	cfg.Settings.Backup = false
+	cfg.Settings.Collision = "rename"
+	cfg.Settings.DryRun = false
+	cfg.Organize.Patterns = []types.Pattern{
+		{
+			Glob:    "*.txt",
+			DestDir: "documents",
+		},
+	}
+	engine.SetConfig(cfg)
+
+	t.Run("move single file", func(t *testing.T) {
+		destPath := filepath.Join(destDir, "test.txt")
+		err := engine.MoveFile(testFile, destPath)
+		assert.NoError(t, err, "Should successfully move file")
+
+		// Verify file was moved
+		_, err = os.Stat(destPath)
+		assert.NoError(t, err, "File should exist at destination")
+		_, err = os.Stat(testFile)
+		assert.Error(t, err, "File should no longer exist at source")
+
+		// Create the test file again for subsequent tests
+		err = os.WriteFile(testFile, []byte("test content"), 0644)
+		require.NoError(t, err, "Failed to recreate test file")
+	})
+
+	t.Run("organize file by pattern", func(t *testing.T) {
+		// Test using pattern-based organization
+		err := engine.OrganizeFile(testFile)
+		assert.NoError(t, err, "Should successfully organize file")
+
+		// Verify file was organized according to pattern
+		destPath := filepath.Join(destDir, "test.txt")
+		_, err = os.Stat(destPath)
+		assert.NoError(t, err, "File should exist at destination")
+		_, err = os.Stat(testFile)
+		assert.Error(t, err, "File should no longer exist at source")
+
+		// Create the test file again for subsequent tests
+		err = os.WriteFile(testFile, []byte("test content"), 0644)
+		require.NoError(t, err, "Failed to recreate test file")
+	})
+
+	t.Run("dry run should not move files", func(t *testing.T) {
+		// Enable dry run
+		engine.SetDryRun(true)
+
+		err := engine.OrganizeFile(testFile)
+		assert.NoError(t, err, "Dry run should complete without errors")
+
+		// Verify file was NOT moved
+		_, err = os.Stat(testFile)
+		assert.NoError(t, err, "File should still exist at source after dry run")
+
+		// Disable dry run for subsequent tests
+		engine.SetDryRun(false)
+	})
+
+	t.Run("organize directory", func(t *testing.T) {
+		// Create multiple test files
+		testDir := filepath.Join(tmpDir, "source")
+		require.NoError(t, os.MkdirAll(testDir, 0755), "Failed to create test directory")
+
+		// Create test files
+		testutils.CreateTestFiles(t, testDir)
+
+		// Organize the directory
+		organized, err := engine.OrganizeDir(testDir)
+		assert.NoError(t, err, "Should organize directory without errors")
+		assert.NotEmpty(t, organized, "Should return list of organized files")
+
+		// Verify text files were moved to documents
+		textFilePath := filepath.Join(destDir, "test1.txt")
+		_, err = os.Stat(textFilePath)
+		assert.NoError(t, err, "Text file should be moved to documents directory")
+	})
+
+	t.Run("handle collision", func(t *testing.T) {
+		// Create a file that would cause a collision
+		collisionSource := filepath.Join(tmpDir, "collision.txt")
+		err := os.WriteFile(collisionSource, []byte("collision test"), 0644)
+		require.NoError(t, err, "Failed to create collision source file")
+
+		// Create the same file at destination
+		collisionDest := filepath.Join(destDir, "collision.txt")
+		err = os.WriteFile(collisionDest, []byte("existing file"), 0644)
+		require.NoError(t, err, "Failed to create collision destination file")
+
+		// Organize with rename collision strategy
+		err = engine.OrganizeFile(collisionSource)
+		assert.NoError(t, err, "Should handle collision according to strategy")
+
+		// Original destination file should still exist
+		_, err = os.Stat(collisionDest)
+		assert.NoError(t, err, "Original destination file should still exist")
+
+		// Source file should be moved to a renamed path
+		_, err = os.Stat(filepath.Join(destDir, "collision_1.txt"))
+		assert.NoError(t, err, "Renamed file should exist")
+	})
+}
+
+// TestOrganizeWithConfig tests the organization engine with various configurations
+func TestOrganizeWithConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create some test files
+	testutils.CreateTestFiles(t, tmpDir)
+
+	// Test with different pattern configurations
+	t.Run("organize with multiple patterns", func(t *testing.T) {
+		engine := organize.New()
+		cfg := &config.Config{}
+		cfg.Settings.CreateDirs = true
+		cfg.Settings.DryRun = false
+		cfg.Organize.Patterns = []types.Pattern{
+			{
+				Glob:    "*.txt",
+				DestDir: "text",
+			},
+			{
+				Glob:    "*.jpg",
+				DestDir: "images",
+			},
+			{
+				Glob:    "*.pdf",
+				DestDir: "documents",
+			},
+			{
+				Glob:    "*.mp3",
+				DestDir: "audio",
+			},
+		}
+		engine.SetConfig(cfg)
+
+		// Organize all files in the temp directory
+		organized, err := engine.OrganizeDir(tmpDir)
+		assert.NoError(t, err, "Should organize without errors")
+		assert.Len(t, organized, 4, "Should organize 4 files")
+
+		// Verify files were moved to appropriate directories
+		_, err = os.Stat(filepath.Join(tmpDir, "text", "test1.txt"))
+		assert.NoError(t, err, "Text file should be in text directory")
+
+		_, err = os.Stat(filepath.Join(tmpDir, "images", "test2.jpg"))
+		assert.NoError(t, err, "JPG file should be in images directory")
+
+		_, err = os.Stat(filepath.Join(tmpDir, "documents", "test3.pdf"))
+		assert.NoError(t, err, "PDF file should be in documents directory")
+
+		_, err = os.Stat(filepath.Join(tmpDir, "audio", "test4.mp3"))
+		assert.NoError(t, err, "MP3 file should be in audio directory")
 	})
 }

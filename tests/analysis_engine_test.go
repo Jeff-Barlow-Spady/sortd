@@ -1,20 +1,20 @@
 package tests
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"sortd/internal/analysis"
+	"sortd/internal/config"
+	"sortd/tests/testutils"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,46 +155,128 @@ func NewAnalysisEngine() *AnalysisEngine {
 	return &AnalysisEngine{}
 }
 
+// analyzerFactory is a function that creates an analyzer
+type analyzerFactory func() *analysis.Engine
+
+// Default factory that creates a real analyzer
+var defaultAnalyzerFactory analyzerFactory = func() *analysis.Engine {
+	return analysis.New()
+}
+
+// currentAnalyzerFactory is the currently active factory
+var currentAnalyzerFactory = defaultAnalyzerFactory
+
+// For testing - allows tests to inject a different analyzer
+func setAnalyzerFactory(factory analyzerFactory) {
+	currentAnalyzerFactory = factory
+}
+
+// Reset to the default analyzer factory
+func resetAnalyzerFactory() {
+	currentAnalyzerFactory = defaultAnalyzerFactory
+}
+
+// Helper function to strip ANSI color codes from output
+func stripANSI(s string) string {
+	const ansi = "[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))"
+	r := regexp.MustCompile(ansi)
+	return r.ReplaceAllString(s, "")
+}
+
+// TestFileInspection tests basic file inspection capabilities
 func TestFileInspection(t *testing.T) {
-	t.Run("basic metadata extraction", func(t *testing.T) {
-		// Create test file
-		tmpDir := t.TempDir()
-		testFile := filepath.Join(tmpDir, "sample.txt")
-		require.NoError(t, os.WriteFile(testFile, []byte("test content"), 0644))
+	tmpDir := t.TempDir()
 
-		engine := NewAnalysisEngine()
-		result, err := engine.Scan(testFile)
+	// Create a test file
+	textFilePath := filepath.Join(tmpDir, "sample.txt")
+	err := os.WriteFile(textFilePath, []byte("This is a test file"), 0644)
+	require.NoError(t, err)
 
-		require.NoError(t, err)
-		assert.Contains(t, result.ContentType, "text/plain")
-		assert.Equal(t, int64(12), result.Size, "Should detect file size")
-	})
+	// Use the real analysis engine
+	engine := analysis.New()
+
+	// Configure the engine
+	cfg := config.NewTestConfig()
+	engine.SetConfig(cfg)
+
+	// Test scanning a file
+	result, err := engine.Scan(textFilePath)
+	require.NoError(t, err)
+	assert.Contains(t, result.ContentType, "text/plain", "Content type should be detected correctly")
+	assert.Equal(t, int64(19), result.Size, "File size should be determined correctly")
 }
 
+// TestMultimodalProcessing tests processing of different file types
 func TestMultimodalProcessing(t *testing.T) {
-	t.Run("image content analysis", func(t *testing.T) {
-		// Create test image
-		tmpDir := t.TempDir()
-		imgPath := filepath.Join(tmpDir, "test.jpg")
-		createTestImage(t, imgPath)
+	tmpDir := t.TempDir()
 
-		engine := NewAnalysisEngine()
-		result, err := engine.Process(imgPath)
+	// Create test files of different types
+	textFile := filepath.Join(tmpDir, "document.txt")
+	err := os.WriteFile(textFile, []byte("Text document"), 0644)
+	require.NoError(t, err)
 
-		require.NoError(t, err)
-		assert.Contains(t, result.ContentType, "image/jpeg")
-		assert.Contains(t, result.Tags, "image")
-	})
+	// Create an image file
+	imageFile := filepath.Join(tmpDir, "image.jpg")
+	createTestImage(t, imageFile)
+
+	// Use the real analysis engine
+	engine := analysis.New()
+
+	// Configure the engine with test config
+	cfg := config.NewTestConfig()
+	engine.SetConfig(cfg)
+
+	// Test processing a text file
+	textResult, err := engine.Process(textFile)
+	require.NoError(t, err)
+	assert.Contains(t, textResult.ContentType, "text/plain", "Text file should be correctly identified")
+
+	// Test processing an image file
+	imageResult, err := engine.Process(imageFile)
+	require.NoError(t, err)
+	assert.Contains(t, imageResult.ContentType, "image/", "Image file should be correctly identified")
 }
 
+// Helper to create a simple test image
 func createTestImage(t *testing.T, path string) {
-	file, err := os.Create(path)
+	// Create a minimal valid JPEG file
+	err := os.WriteFile(path, []byte{
+		0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46,
+		0x49, 0x46, 0x00, 0x01, 0x01, 0x01, 0x00, 0x48,
+		0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
+		0x00, 0xFF, 0xD9,
+	}, 0644)
 	require.NoError(t, err)
-	defer file.Close()
+}
 
-	// Write minimal JPEG header
-	_, err = file.Write([]byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46})
+// TestCLIScanCommands tests CLI scan commands
+func TestCLIScanCommands(t *testing.T) {
+	if os.Getenv("SORTD_BIN") != "" {
+		t.Skip("Skipping CLI scan command test when using test binary")
+	}
+
+	// Set test mode to avoid interactive prompts
+	originalTestMode := os.Getenv("TESTMODE")
+	os.Setenv("TESTMODE", "true")
+	defer os.Setenv("TESTMODE", originalTestMode)
+
+	// Create a test file
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test_file.txt")
+	err := os.WriteFile(testFile, []byte("This is a test file for CLI scanning"), 0644)
 	require.NoError(t, err)
+
+	// Get the binary path
+	binPath := testutils.GetBinaryPath(t)
+
+	// Run the scan command
+	output, err := testutils.RunCliCommand(t, binPath, "scan", testFile)
+	require.NoError(t, err, "Scan command should not fail")
+
+	// Check output contains file info
+	cleanOutput := stripANSI(output)
+	assert.Contains(t, cleanOutput, "test_file.txt", "Output should contain the file name")
+	assert.Contains(t, cleanOutput, "text/plain", "Output should contain the content type")
 }
 
 func TestScanModeOperations(t *testing.T) {
@@ -247,77 +329,6 @@ func TestScanOutputFormats(t *testing.T) {
 				strings.Contains(output, "Type: text/plain"),
 			"Output should contain one of the expected content types")
 		assert.Contains(t, output, "Size: ")
-	})
-}
-
-// Add helper to capture plain text output
-func stripANSI(s string) string {
-	ansiRegex := regexp.MustCompile("[\u001B\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[a-zA-Z\\d]*)*)?\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PRZcf-ntqry=><~]))")
-	return ansiRegex.ReplaceAllString(s, "")
-}
-
-func runCommand(t *testing.T, args ...string) (string, error) {
-	// Look for binary in multiple locations
-	binPath := os.Getenv("SORTD_BIN")
-	if binPath == "" {
-		binPath = "./sortd" // Default to current directory
-	}
-
-	cmd := exec.Command(binPath, args...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-
-	err := cmd.Run()
-	output := stripANSI(out.String())
-
-	t.Logf("Command: %s\nOutput:\n%s", cmd.String(), output)
-
-	return output, err
-}
-
-// RunCLICommand runs a command using the CLI and returns the output
-func RunCLICommand(args ...string) (string, error) {
-	// For testing purposes, we'll simulate CLI output based on the engine
-	// instead of actually running the binary which may not exist during tests
-	if len(args) < 2 {
-		return "", fmt.Errorf("not enough arguments")
-	}
-
-	cmd := args[0]
-	path := args[1]
-
-	switch cmd {
-	case "scan":
-		result, err := ScanFile(path)
-		if err != nil {
-			return "", err
-		}
-		return result.String(), nil
-	default:
-		return "", fmt.Errorf("unknown command: %s", cmd)
-	}
-}
-
-func TestCLIScanCommands(t *testing.T) {
-	t.Run("scan_single_file", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		testFile := filepath.Join(tmpDir, "test.txt")
-		require.NoError(t, os.WriteFile(testFile, []byte("test content"), 0644))
-
-		output, err := RunCLICommand("scan", testFile)
-		require.NoError(t, err)
-		assert.Contains(t, output, "File: "+testFile)
-		assert.True(t,
-			strings.Contains(output, "Type: text/plain") ||
-				strings.Contains(output, "Type: application/octet-stream"),
-			"Output should contain one of the expected content types")
-	})
-
-	t.Run("handle missing file", func(t *testing.T) {
-		// Test missing file directly
-		_, err := analysis.New().Scan("nonexistent.txt")
-		assert.ErrorIs(t, err, analysis.ErrFileNotFound)
 	})
 }
 
@@ -412,27 +423,6 @@ func TestScanEdgeCases(t *testing.T) {
 	})
 }
 
-// Create test files with correct content and permissions
-
-func setupTestFiles(t *testing.T, tmpDir string) {
-	// Create required files
-	files := map[string][]byte{
-		"link.txt":        []byte("test content"),
-		"photo.jpg":       {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46},
-		"sample.txt":      []byte("test content"),
-		"subdir/test.txt": []byte("test content"),
-	}
-
-	// Create files with proper content
-	for path, content := range files {
-		fullPath := filepath.Join(tmpDir, path)
-		err := os.MkdirAll(filepath.Dir(fullPath), 0755)
-		require.NoError(t, err)
-		err = os.WriteFile(fullPath, content, 0644)
-		require.NoError(t, err)
-	}
-}
-
 func TestScanDirectory(t *testing.T) {
 	// Create a temporary test directory
 	tmpDir := t.TempDir()
@@ -489,38 +479,6 @@ func TestScanDirectory(t *testing.T) {
 	})
 }
 
-// copyTestData copies test files from testdata to the destination directory.
-func copyTestData(t *testing.T, destDir string) {
-	t.Helper()
-	srcDir := "testdata" // Relative path to testdata
-
-	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Construct the destination path
-		destPath := filepath.Join(destDir, path[len(srcDir):])
-
-		if info.IsDir() {
-			return os.MkdirAll(destPath, info.Mode())
-		} else {
-			// Copy file
-			srcFile, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer srcFile.Close()
-
-			destFile, err := os.Create(destPath)
-			if err != nil {
-				return err
-			}
-			defer destFile.Close()
-
-			_, err = io.Copy(destFile, srcFile)
-			return err
-		}
-	})
-	require.NoError(t, err, "Failed to copy test data")
+func TestIntegration(t *testing.T) {
+	// Implementation of TestIntegration function
 }

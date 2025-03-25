@@ -17,10 +17,11 @@ type Config struct {
 		Patterns []types.Pattern `yaml:"patterns"` // File organization patterns
 	} `yaml:"organize"`
 	Settings struct {
-		DryRun     bool   `yaml:"dry_run"`     // If true, simulate operations
-		CreateDirs bool   `yaml:"create_dirs"` // Create destination directories
-		Backup     bool   `yaml:"backup"`      // Create backups before moving
-		Collision  string `yaml:"collision"`   // Collision strategy: rename, skip, or ask
+		DryRun                 bool   `yaml:"dry_run"`                 // If true, simulate operations
+		CreateDirs             bool   `yaml:"create_dirs"`             // Create destination directories
+		Backup                 bool   `yaml:"backup"`                  // Create backups before moving
+		Collision              string `yaml:"collision"`               // Collision strategy: rename, skip, or ask
+		ImprovedCategorization bool   `yaml:"improved_categorization"` // Use improved file type categorization
 	} `yaml:"settings"`
 	Directories struct {
 		Default string   `yaml:"default"` // Default working directory
@@ -30,10 +31,35 @@ type Config struct {
 		Pattern string `yaml:"pattern"` // Pattern to match
 		Target  string `yaml:"target"`  // Target directory
 	} `yaml:"rules"`
+	// Directory-specific rules allow different rule sets for different directories
+	DirectoryRules map[string][]struct {
+		Pattern string `yaml:"pattern"` // Pattern to match
+		Target  string `yaml:"target"`  // Target directory
+	} `yaml:"directory_rules"`
 	WatchMode struct {
-		Enabled  bool `yaml:"enabled"`  // Enable watch mode
-		Interval int  `yaml:"interval"` // Watch interval in seconds
+		Enabled             bool `yaml:"enabled"`              // Enable watch mode
+		Interval            int  `yaml:"interval"`             // Watch interval in seconds
+		ConfirmationPeriod  int  `yaml:"confirmation_period"`  // Confirmation period in seconds (0 = disabled)
+		RequireConfirmation bool `yaml:"require_confirmation"` // Require confirmation before executing rules
 	} `yaml:"watch_mode"`
+	Theme struct {
+		Name     string `yaml:"name"`     // Theme name (default, dark, light, etc.)
+		Primary  string `yaml:"primary"`  // Primary color for branding
+		Success  string `yaml:"success"`  // Success message color
+		Warning  string `yaml:"warning"`  // Warning message color
+		Error    string `yaml:"error"`    // Error message color
+		Info     string `yaml:"info"`     // Informational message color
+		Emphasis string `yaml:"emphasis"` // Emphasis color for text that should stand out
+		Border   string `yaml:"border"`   // Border color for frames
+	} `yaml:"theme"`
+	Templates []struct {
+		Name        string `yaml:"name"`        // Template name
+		Description string `yaml:"description"` // Template description
+		Rules       []struct {
+			Pattern string `yaml:"pattern"` // Pattern to match
+			Target  string `yaml:"target"`  // Target directory
+		} `yaml:"rules"`
+	} `yaml:"templates"` // Rule templates for common use cases
 }
 
 // LoadConfig loads configuration from the default location
@@ -79,6 +105,7 @@ func LoadConfigFile(path string) (*Config, error) {
 	cfg.Settings.DryRun = tempCfg.Settings.DryRun
 	cfg.Settings.CreateDirs = tempCfg.Settings.CreateDirs
 	cfg.Settings.Backup = tempCfg.Settings.Backup
+	cfg.Settings.ImprovedCategorization = tempCfg.Settings.ImprovedCategorization
 
 	if tempCfg.Directories.Default != "" {
 		cfg.Directories.Default = tempCfg.Directories.Default
@@ -93,6 +120,19 @@ func LoadConfigFile(path string) (*Config, error) {
 	cfg.WatchMode.Enabled = tempCfg.WatchMode.Enabled
 	if tempCfg.WatchMode.Interval > 0 {
 		cfg.WatchMode.Interval = tempCfg.WatchMode.Interval
+	}
+	cfg.WatchMode.ConfirmationPeriod = tempCfg.WatchMode.ConfirmationPeriod
+	cfg.WatchMode.RequireConfirmation = tempCfg.WatchMode.RequireConfirmation
+
+	// Initialize directory-specific rules
+	cfg.DirectoryRules = make(map[string][]struct {
+		Pattern string `yaml:"pattern"`
+		Target  string `yaml:"target"`
+	})
+
+	// Merge directory-specific rules
+	for dir, rules := range tempCfg.DirectoryRules {
+		cfg.DirectoryRules[dir] = rules
 	}
 
 	// Validate the final configuration
@@ -111,10 +151,11 @@ func defaultConfig() *Config {
 	cfg.Organize.Patterns = []types.Pattern{}
 
 	// Set default settings
-	cfg.Settings.DryRun = true     // Safe by default
-	cfg.Settings.CreateDirs = true // Create destination directories
-	cfg.Settings.Backup = false    // No backup by default
-	cfg.Settings.Collision = "ask" // Ask on collision by default
+	cfg.Settings.DryRun = true                 // Safe by default
+	cfg.Settings.CreateDirs = true             // Create destination directories
+	cfg.Settings.Backup = false                // No backup by default
+	cfg.Settings.Collision = "ask"             // Ask on collision by default
+	cfg.Settings.ImprovedCategorization = true // Enable improved categorization by default
 
 	// Initialize directories struct
 	cfg.Directories.Default = "." // Current directory by default
@@ -126,9 +167,66 @@ func defaultConfig() *Config {
 		Target  string `yaml:"target"`
 	}{}
 
+	// Initialize directory-specific rules
+	cfg.DirectoryRules = make(map[string][]struct {
+		Pattern string `yaml:"pattern"`
+		Target  string `yaml:"target"`
+	})
+
 	// Set default watch mode settings
 	cfg.WatchMode.Enabled = false
-	cfg.WatchMode.Interval = 5 // 5 seconds default interval
+	cfg.WatchMode.Interval = 5                // 5 seconds default interval
+	cfg.WatchMode.ConfirmationPeriod = 0      // Disabled by default
+	cfg.WatchMode.RequireConfirmation = false // Disabled by default
+
+	// Initialize default templates
+	cfg.Templates = []struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+		Rules       []struct {
+			Pattern string `yaml:"pattern"`
+			Target  string `yaml:"target"`
+		} `yaml:"rules"`
+	}{
+		{
+			Name:        "documents",
+			Description: "Common document file organization",
+			Rules: []struct {
+				Pattern string `yaml:"pattern"`
+				Target  string `yaml:"target"`
+			}{
+				{Pattern: "*.pdf", Target: "Documents/PDFs"},
+				{Pattern: "*.doc*", Target: "Documents/Word"},
+				{Pattern: "*.xls*", Target: "Documents/Excel"},
+				{Pattern: "*.ppt*", Target: "Documents/Presentations"},
+				{Pattern: "*.txt", Target: "Documents/Text"},
+			},
+		},
+		{
+			Name:        "media",
+			Description: "Media file organization (images, video, audio)",
+			Rules: []struct {
+				Pattern string `yaml:"pattern"`
+				Target  string `yaml:"target"`
+			}{
+				{Pattern: "*.{jpg,jpeg,png,gif,bmp,tiff}", Target: "Media/Images"},
+				{Pattern: "*.{mp4,mov,avi,mkv,wmv}", Target: "Media/Videos"},
+				{Pattern: "*.{mp3,wav,flac,aac,ogg}", Target: "Media/Audio"},
+			},
+		},
+		{
+			Name:        "downloads",
+			Description: "Common downloads organization",
+			Rules: []struct {
+				Pattern string `yaml:"pattern"`
+				Target  string `yaml:"target"`
+			}{
+				{Pattern: "*.{zip,tar,gz,rar,7z}", Target: "Downloads/Archives"},
+				{Pattern: "*.{exe,msi,deb,rpm}", Target: "Downloads/Installers"},
+				{Pattern: "*.{iso,img}", Target: "Downloads/Disk Images"},
+			},
+		},
+	}
 
 	return cfg
 }
@@ -174,6 +272,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("watch interval must be >= 1 second")
 	}
 
+	// Validate confirmation period
+	if c.WatchMode.ConfirmationPeriod < 0 {
+		return fmt.Errorf("confirmation period must be >= 0 seconds")
+	}
+
 	// Validate patterns
 	for i, pattern := range c.Organize.Patterns {
 		if pattern.Match == "" {
@@ -191,6 +294,21 @@ func (c *Config) Validate() error {
 		}
 		if rule.Target == "" {
 			return fmt.Errorf("rule %d: target is required", i)
+		}
+	}
+
+	// Validate directory-specific rules
+	for dir, rules := range c.DirectoryRules {
+		if dir == "" {
+			return fmt.Errorf("directory-specific rule: directory path cannot be empty")
+		}
+		for i, rule := range rules {
+			if rule.Pattern == "" {
+				return fmt.Errorf("directory rule %s/%d: pattern is required", dir, i)
+			}
+			if rule.Target == "" {
+				return fmt.Errorf("directory rule %s/%d: target is required", dir, i)
+			}
 		}
 	}
 
@@ -229,4 +347,91 @@ func NewTestConfig() *Config {
 // This is simply an alias for New().
 func New() *Config {
 	return defaultConfig()
+}
+
+// GetTheme returns a predefined theme configuration by name.
+// If the theme doesn't exist, returns the default theme.
+func GetTheme(name string) map[string]string {
+	themes := map[string]map[string]string{
+		"default": {
+			"primary":  "213", // Purple
+			"success":  "114", // Green
+			"warning":  "220", // Yellow
+			"error":    "196", // Red
+			"info":     "39",  // Blue
+			"emphasis": "212", // Light Pink
+			"border":   "213", // Purple
+		},
+		"dark": {
+			"primary":  "105", // Dark Blue
+			"success":  "78",  // Dark Green
+			"warning":  "214", // Dark Yellow
+			"error":    "160", // Dark Red
+			"info":     "33",  // Dark Blue
+			"emphasis": "147", // Light Blue
+			"border":   "105", // Dark Blue
+		},
+		"light": {
+			"primary":  "135", // Light Purple
+			"success":  "150", // Light Green
+			"warning":  "222", // Light Yellow
+			"error":    "210", // Light Red
+			"info":     "117", // Light Blue
+			"emphasis": "219", // Very Light Pink
+			"border":   "135", // Light Purple
+		},
+		"monochrome": {
+			"primary":  "245", // Light Grey
+			"success":  "252", // White
+			"warning":  "241", // Medium Grey
+			"error":    "232", // Black
+			"info":     "248", // Grey
+			"emphasis": "255", // Bright White
+			"border":   "245", // Light Grey
+		},
+		"ocean": {
+			"primary":  "31",  // Teal
+			"success":  "36",  // Green-Blue
+			"warning":  "220", // Yellow
+			"error":    "196", // Red
+			"info":     "33",  // Blue
+			"emphasis": "51",  // Cyan
+			"border":   "31",  // Teal
+		},
+		"sunset": {
+			"primary":  "208", // Orange
+			"success":  "154", // Green
+			"warning":  "214", // Dark Yellow
+			"error":    "196", // Red
+			"info":     "69",  // Light Green
+			"emphasis": "203", // Pink-Orange
+			"border":   "208", // Orange
+		},
+	}
+
+	if theme, exists := themes[name]; exists {
+		return theme
+	}
+
+	return themes["default"]
+}
+
+// ApplyTheme sets the theme in the configuration.
+// It updates the theme colors based on the theme name.
+func (c *Config) ApplyTheme(name string) {
+	theme := GetTheme(name)
+
+	c.Theme.Name = name
+	c.Theme.Primary = theme["primary"]
+	c.Theme.Success = theme["success"]
+	c.Theme.Warning = theme["warning"]
+	c.Theme.Error = theme["error"]
+	c.Theme.Info = theme["info"]
+	c.Theme.Emphasis = theme["emphasis"]
+	c.Theme.Border = theme["border"]
+}
+
+// ListThemes returns a list of available theme names.
+func ListThemes() []string {
+	return []string{"default", "dark", "light", "monochrome", "ocean", "sunset"}
 }

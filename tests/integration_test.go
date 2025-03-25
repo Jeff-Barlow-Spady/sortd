@@ -1,123 +1,150 @@
 package tests
 
 import (
-	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
+
+	"sortd/tests/testutils"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func buildBinary(t *testing.T) string {
-	t.Helper()
-	binPath := filepath.Join(t.TempDir(), "sortd")
-	buildCmd := exec.Command("go", "build", "-o", binPath, "../cmd/sortd")
-	require.NoError(t, buildCmd.Run())
-	return binPath
-}
+func TestBinaryCommands(t *testing.T) {
+	binPath := testutils.GetBinaryPath(t)
 
-func TestBinaryNavigation(t *testing.T) {
-	binPath := buildBinary(t)
-	testDir := t.TempDir()
-	createTestFiles(t, testDir)
+	t.Run("help command", func(t *testing.T) {
+		output, err := testutils.RunCliCommand(t, binPath, "--help")
+		require.NoError(t, err, "Help command should not fail")
+		assert.Contains(t, output, "Usage:", "Help output should contain usage information")
+		assert.Contains(t, output, "Available Commands:", "Help output should list commands")
+	})
 
-	t.Run("basic navigation", func(t *testing.T) {
-		cmd := exec.Command(binPath)
-		cmd.Dir = testDir
-		cmd.Env = append(os.Environ(),
-			"TESTMODE=true",
-			"HEADLESS=true",
-			"CI=true",
-		)
-
-		// Use stdbuf to disable output buffering
-		cmd = exec.Command("stdbuf", "-o0", binPath)
-		cmd.Dir = testDir
-		stdin, err := cmd.StdinPipe()
-		require.NoError(t, err)
-		stdout, err := cmd.StdoutPipe()
-		require.NoError(t, err)
-
-		err = cmd.Start()
-		require.NoError(t, err)
-
-		// Increase timeouts
-		time.Sleep(2 * time.Second)
-		fmt.Fprintln(stdin, "j")
-		time.Sleep(1 * time.Second)
-		fmt.Fprintln(stdin, "q")
-
-		output, err := io.ReadAll(stdout)
-		require.NoError(t, err)
-
-		cleanOutput := stripANSI(string(output))
-		assert.Contains(t, cleanOutput, "file1.txt")
-		assert.Contains(t, cleanOutput, "file2.txt")
+	t.Run("version command", func(t *testing.T) {
+		output, err := testutils.RunCliCommand(t, binPath, "version")
+		require.NoError(t, err, "Version command should not fail")
+		assert.Contains(t, output, "sortd version", "Version output should contain version information")
 	})
 }
 
-func TestBinaryFileSelection(t *testing.T) {
-	binPath := buildBinary(t)
+func TestOrganizeCommand(t *testing.T) {
+	binPath := testutils.GetBinaryPath(t)
 	testDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(testDir, "test1.txt"), []byte("test1"), 0644))
+	testutils.CreateTestFiles(t, testDir)
 
-	t.Run("select file", func(t *testing.T) {
-		cmd := exec.Command(binPath)
-		cmd.Dir = testDir
-		cmd.Env = append(os.Environ(), "TESTMODE=true")
+	t.Run("organize with dry-run", func(t *testing.T) {
+		// Run organize with dry-run flag
+		output, err := testutils.RunCliCommand(t, binPath, "organize", testDir, "--dry-run")
+		require.NoError(t, err, "Organize with dry-run should not fail")
 
-		stdin, err := cmd.StdinPipe()
-		require.NoError(t, err)
-		stdout, err := cmd.StdoutPipe()
-		require.NoError(t, err)
+		// Check that the output mentions the test files
+		assert.Contains(t, output, "test1.txt", "Output should mention text file")
 
-		err = cmd.Start()
-		require.NoError(t, err)
+		// Verify files haven't been moved (dry-run)
+		_, err = os.Stat(filepath.Join(testDir, "test1.txt"))
+		assert.NoError(t, err, "File should still exist in original location after dry-run")
+	})
 
-		time.Sleep(100 * time.Millisecond)
+	t.Run("organize with fixture files", func(t *testing.T) {
+		// Create a directory with copied fixture files
+		fixturesDir := filepath.Join(t.TempDir(), "fixtures")
+		require.NoError(t, os.MkdirAll(fixturesDir, 0755))
+		testutils.CopyFixtures(t, fixturesDir)
 
-		// Simulate selecting a file (e.g. with space) then quit.
-		fmt.Fprintln(stdin, " ")
-		time.Sleep(50 * time.Millisecond)
-		fmt.Fprintln(stdin, "q")
+		// Run organize with dry-run on fixture files
+		output, err := testutils.RunCliCommand(t, binPath, "organize", fixturesDir, "--dry-run")
+		require.NoError(t, err, "Organize command with fixtures should not fail")
 
-		output, err := io.ReadAll(stdout)
-		require.NoError(t, err)
-
-		// Assert that the output contains the file name (which indicates it was selected/highlighted).
-		assert.Contains(t, string(output), "test1.txt")
+		// Check for some expected filenames in output
+		if _, err := os.Stat(filepath.Join(fixturesDir, "sample.txt")); err == nil {
+			assert.Contains(t, output, "sample.txt", "Output should mention sample.txt fixture")
+		}
 	})
 }
 
-func TestBinarySetup(t *testing.T) {
-	binPath := buildBinary(t)
+func TestSetupCommand(t *testing.T) {
+	binPath := testutils.GetBinaryPath(t)
 
-	t.Run("quickstart flow", func(t *testing.T) {
-		cmd := exec.Command(binPath)
-		cmd.Env = append(os.Environ(), "TESTMODE=true")
-		stdin, err := cmd.StdinPipe()
-		require.NoError(t, err)
-		stdout, err := cmd.StdoutPipe()
-		require.NoError(t, err)
+	t.Run("setup dry-run", func(t *testing.T) {
+		// Run setup with dry-run flag
+		output, err := testutils.RunCliCommand(t, binPath, "setup", "--dry-run")
+		require.NoError(t, err, "Setup with dry-run should not fail")
 
-		err = cmd.Start()
-		require.NoError(t, err)
+		// Check output for setup-related information
+		assert.True(t,
+			strings.Contains(output, "configuration") ||
+				strings.Contains(output, "setup") ||
+				strings.Contains(output, "config"),
+			"Output should contain setup-related information")
+	})
+}
 
-		time.Sleep(100 * time.Millisecond)
+func TestRulesCommand(t *testing.T) {
+	binPath := testutils.GetBinaryPath(t)
 
-		// Simulate quickstart (option "1") then quit.
-		fmt.Fprintln(stdin, "1")
-		time.Sleep(50 * time.Millisecond)
-		fmt.Fprintln(stdin, "q")
+	t.Run("rules list", func(t *testing.T) {
+		// Run rules list command
+		output, err := testutils.RunCliCommand(t, binPath, "rules", "list")
+		require.NoError(t, err, "Rules list command should not fail")
 
-		output, err := io.ReadAll(stdout)
-		require.NoError(t, err)
+		// Output should mention rules or indicate there are none
+		assert.True(t,
+			strings.Contains(output, "rules") ||
+				strings.Contains(output, "Rules") ||
+				strings.Contains(output, "No rules"),
+			"Output should mention rules")
+	})
+}
 
-		assert.Contains(t, string(output), "Quick Start")
+func TestCliConfigIntegration(t *testing.T) {
+	binPath := testutils.GetBinaryPath(t)
+	tmpDir := t.TempDir()
+
+	// Create test config
+	configContent := `
+organize:
+  patterns:
+    - match: "*.txt"
+      target: "documents/"
+    - match: "*.jpg"
+      target: "images/"
+settings:
+  dry_run: false
+  create_dirs: true
+  backup: false
+  collision: "rename"
+directories:
+  default: "` + tmpDir + `"
+  watch:
+    - "` + tmpDir + `"
+`
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0644))
+
+	// Create test files
+	testutils.CreateTestFiles(t, tmpDir)
+
+	// Create target directories
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "documents"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "images"), 0755))
+
+	t.Run("organize with config", func(t *testing.T) {
+		// Run organize with config
+		_, err := testutils.RunCliCommand(t, binPath, "organize",
+			"--config", configPath,
+			filepath.Join(tmpDir, "test1.txt"))
+
+		require.NoError(t, err, "Organize command should not fail")
+
+		// Verify file was moved according to rule
+		movedFile := filepath.Join(tmpDir, "documents", "test1.txt")
+		_, err = os.Stat(movedFile)
+		assert.NoError(t, err, "File should be moved to target directory")
+
+		// Verify original file no longer exists
+		_, err = os.Stat(filepath.Join(tmpDir, "test1.txt"))
+		assert.True(t, os.IsNotExist(err), "Original file should no longer exist")
 	})
 }
