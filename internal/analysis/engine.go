@@ -136,29 +136,43 @@ func (e *Engine) Process(path string) (*types.FileInfo, error) {
 	return result, nil
 }
 
-// ScanDirectory performs analysis on all files in a directory
+// ScanDirectory performs analysis on entries (files and dirs) in a single directory level.
 func (e *Engine) ScanDirectory(dir string) ([]*types.FileInfo, error) {
-	var results []*types.FileInfo
-
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() {
-			result, err := e.Scan(path)
-			if err != nil {
-				return err
-			}
-			results = append(results, result)
-		}
-		return nil
-	})
-
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to walk directory: %w", err)
+		// Handle specific errors like permission denied or not a directory?
+		return nil, fmt.Errorf("failed to read directory '%s': %w", dir, err)
 	}
 
+	var results []*types.FileInfo
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		var fileInfo *types.FileInfo
+		var scanErr error
+
+		if entry.IsDir() {
+			// Create a FileInfo for the directory
+			fileInfo = &types.FileInfo{
+				Path:        path,
+				ContentType: "inode/directory", // Convention for directories
+				Size:        0,               // Directories don't have a size in this context
+				Tags:        []string{"directory"}, // Add a 'directory' tag
+			}
+		} else {
+			// It's a file, use the Scan method
+			fileInfo, scanErr = e.Scan(path)
+			if scanErr != nil {
+				// Log or collect errors for files? For now, we skip problematic files.
+				// Consider returning partial results with errors.
+				fmt.Fprintf(os.Stderr, "Error scanning file %s: %v\n", path, scanErr) // Log to stderr
+				continue // Skip this file
+			}
+		}
+
+		results = append(results, fileInfo)
+	}
+
+	// Note: Sorting is handled by the caller (e.g., TUI) if needed.
 	return results, nil
 }
 

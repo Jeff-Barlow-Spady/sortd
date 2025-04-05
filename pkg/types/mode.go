@@ -24,11 +24,15 @@ type ModelReader interface {
 	CurrentDir() string
 }
 
-// FileEntry represents a file in the current directory
+// FileEntry represents a file or directory in the TUI list.
+// Note: This might be similar but distinct from FileInfo used by analysis.
 type FileEntry struct {
 	Name        string
 	Path        string
-	ContentType string
+	ContentType string // e.g., "image/jpeg", "text/plain", "inode/directory"
 	Size        int64
 	Tags        []string
+	IsDir       bool // Added field to distinguish files and directories
 }
+
+// FilterValue is required by the list component for filtering.

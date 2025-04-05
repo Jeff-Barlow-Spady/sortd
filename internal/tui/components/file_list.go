@@ -21,5 +21,22 @@ func NewFileList() *FileList {
 // Add file list rendering logic...
 
 func (f *FileList) Render() string {
-	return styles.FileListStyle.Render(f.files)
+	// Convert the file entries to a readable string format
+	var fileListStr string
+	for i, file := range f.files {
+		prefix := "  "
+		if i == f.cursor {
+			prefix = "> "
+		}
+
+		if f.selected[file.Path] {
+			prefix += "* "
+		} else {
+			prefix += "  "
+		}
+
+		fileListStr += prefix + file.Name + "\n"
+	}
+
+	return styles.FileListStyle.Render(fileListStr)
 }

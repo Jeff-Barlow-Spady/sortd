@@ -227,3 +227,64 @@ func (e *Engine) OrganizeDir(dir string) ([]string, error) {
 	// Implementation here
 	return organized, nil
 }
+
+// OrganizeDirectory organizes all files in a directory according to the configured patterns
+func (e *Engine) OrganizeDirectory(directory string) ([]types.OrganizeResult, error) {
+	var results []types.OrganizeResult
+
+	// Check if directory exists
+	dirInfo, err := os.Stat(directory)
+	if err != nil {
+		return nil, fmt.Errorf("error accessing directory: %w", err)
+	}
+
+	if !dirInfo.IsDir() {
+		return nil, fmt.Errorf("path is not a directory: %s", directory)
+	}
+
+	// Read directory contents
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, fmt.Errorf("error reading directory: %w", err)
+	}
+
+	// Process each file
+	for _, entry := range entries {
+		// Skip directories
+		if entry.IsDir() {
+			continue
+		}
+
+		// Get full file path
+		filePath := filepath.Join(directory, entry.Name())
+
+		// Find destination using patterns
+		destDir, found := e.findDestination(filePath)
+		if !found {
+			// Skip files that don't match any pattern
+			continue
+		}
+
+		// Build destination path
+		destPath := filepath.Join(destDir, entry.Name())
+
+		// Create result object
+		result := types.OrganizeResult{
+			SourcePath:      filePath,
+			DestinationPath: destPath,
+		}
+
+		// Try to move the file
+		err := e.MoveFile(filePath, destPath)
+		if err != nil {
+			result.Error = err
+		} else {
+			result.Moved = !e.dryRun
+		}
+
+		// Add to results
+		results = append(results, result)
+	}
+
+	return results, nil
+}

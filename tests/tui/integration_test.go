@@ -170,7 +170,7 @@ func TestTUIIntegration(t *testing.T) {
 	}
 
 	// Initialize model with the temp directory
-	m := tui.New()
+	m := tui.New("test-version")
 	m.SetCurrentDir(tmpDir)
 	require.NoError(t, m.ScanDirectory())
 

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"sortd/internal/config"
 	"sortd/internal/organize"
 	"sortd/pkg/types"
 
@@ -67,7 +66,7 @@ func selectFilesInteractive(files []string) []string {
 }
 
 // printOrganizePlan prints the organization plan for dry run mode
-func printOrganizePlan(organizer organize.Organizer, files []string) {
+func printOrganizePlan(organizer *organize.Engine, files []string) {
 	fmt.Printf("Would organize %d files:\n", len(files))
 	for _, file := range files {
 		fmt.Printf("  %s would be moved\n", file)
@@ -134,17 +133,8 @@ func NewOrganizeCmd() *cobra.Command {
 				return
 			}
 
-			// Setup engine using the factory from the organize package
-			organizeEngine := organize.CurrentOrganizerFactory()
-
-			// Configure the engine only if we have a config
-			if cfg != nil {
-				organizeEngine.SetConfig(cfg)
-			} else {
-				// If no config is available, create a default one
-				defaultCfg := config.New()
-				organizeEngine.SetConfig(defaultCfg)
-			}
+			// Setup engine using the organize package directly
+			organizeEngine := organize.NewWithConfig(cfg)
 
 			// Override dry run if specified
 			if dryRun {

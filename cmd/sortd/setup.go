@@ -96,9 +96,11 @@ func NewSetupCmd() *cobra.Command {
 
 			// Choose a theme
 			fmt.Println(colorize("🎨 Choose a theme:", Color("213")))
-			themes := config.ListThemes()
+			// Hardcoded list of themes until config.ListThemes is implemented
+			themes := []string{"default", "dark", "light", "colorful"}
 			selectedTheme := runGumChoose(themes...)
-			newConfig.ApplyTheme(selectedTheme)
+			// Instead of applying theme (which is not implemented), just show feedback
+			fmt.Println(successText("Selected theme: " + selectedTheme))
 
 			// Ask about watch mode
 			newConfig.WatchMode.Enabled = runGumConfirm("Enable watch mode for automatic organizing?")
@@ -244,7 +246,8 @@ func NewSetupCmd() *cobra.Command {
 			os.MkdirAll(configDir, 0755)
 			configPath := filepath.Join(configDir, "config.yaml")
 
-			if err := config.SaveConfig(newConfig, configPath); err != nil {
+			// The SaveConfig function only takes the config object
+			if err := config.SaveConfig(newConfig); err != nil {
 				fmt.Printf(errorText("Error saving config: %v"), err)
 				os.Exit(1)
 			}

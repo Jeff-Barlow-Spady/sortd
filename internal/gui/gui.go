@@ -5,9 +5,12 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"sort"
 	"sortd/internal/config"
 	"strconv"
 	"strings"
+
+	"sortd/internal/organize"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -22,16 +25,18 @@ import (
 
 // App is the GUI application
 type App struct {
-	fyneApp       fyne.App
-	mainWindow    fyne.Window
-	cfg           *config.Config
-	cmdRunner     *CommandRunner
-	watchRunning  bool
-	statusUpdater func()
+	fyneApp        fyne.App
+	mainWindow     fyne.Window
+	cfg            *config.Config
+	cmdRunner      *CommandRunner
+	watchRunning   bool
+	statusUpdater  func()
+	organizeEngine *organize.Engine
+	pathLabel      *widget.Label // Reference to the path display label
 }
 
 // NewApp creates a new GUI application
-func NewApp(cfg *config.Config) *App {
+func NewApp(cfg *config.Config, organizeEngine *organize.Engine) *App {
 	// Create app with a unique ID for preferences storage
 	fyneApp := app.NewWithID("io.github.sortd")
 
@@ -48,10 +53,11 @@ func NewApp(cfg *config.Config) *App {
 	configPath := filepath.Join(home, ".config", "sortd", "config.yaml")
 
 	a := &App{
-		fyneApp:      fyneApp,
-		cfg:          cfg,
-		cmdRunner:    NewCommandRunner(binaryPath, configPath),
-		watchRunning: false,
+		fyneApp:        fyneApp,
+		cfg:            cfg,
+		cmdRunner:      NewCommandRunner(binaryPath, configPath),
+		watchRunning:   false,
+		organizeEngine: organizeEngine,
 	}
 
 	a.mainWindow = a.fyneApp.NewWindow("Sortd")
@@ -157,9 +163,27 @@ func (a *App) setupMainWindow() {
 	// Create terminal-like file browser (left panel)
 	fileListLabel := widget.NewLabelWithStyle("File Browser", fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true})
 
-	// Create file list using a custom widget to look more terminal-like
+	// Create a path indicator to show current directory
+	a.pathLabel = widget.NewLabelWithStyle(fmt.Sprintf("Location: %s", a.cfg.Directories.Default),
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Monospace: true})
+
+	// Create a path header container with file browser label, path indicator
+	pathHeader := container.NewVBox(
+		fileListLabel,
+		container.NewHBox(a.pathLabel),
+	)
+
+	// Create file list using actual directory content
 	fileList := widget.NewList(
-		func() int { return 10 },
+		func() int {
+			// Get the list of files from the current directory
+			files, err := a.getDirectoryFiles(a.cfg.Directories.Default)
+			if err != nil {
+				return 0
+			}
+			return len(files)
+		},
 		func() fyne.CanvasObject {
 			return container.NewHBox(
 				widget.NewIcon(theme.FolderIcon()),
@@ -171,38 +195,38 @@ func (a *App) setupMainWindow() {
 			iconObj := hbox.Objects[0].(*widget.Icon)
 			label := hbox.Objects[1].(*widget.Label)
 
-			// Sample folders
-			folders := []string{
-				".pytest_cache",
-				".venv",
-				".vscode",
-				"__pycache__",
-				"dist",
-				"refs",
-				"src",
-				"tests",
-				".gitignore",
-				".python-version",
+			// Get actual files
+			files, err := a.getDirectoryFiles(a.cfg.Directories.Default)
+			if err != nil || id >= len(files) {
+				label.SetText("Error reading directory")
+				return
 			}
 
-			if id < len(folders) {
-				// Set icon based on whether it's a file or folder
-				if strings.HasPrefix(folders[id], ".") && !strings.Contains(folders[id], "/") {
-					iconObj.SetResource(theme.DocumentIcon())
-					label.SetText(folders[id])
-				} else {
-					// Check if it looks like a directory name
-					if !strings.Contains(folders[id], ".") {
-						iconObj.SetResource(theme.FolderIcon())
-						label.SetText(folders[id])
-					} else {
-						iconObj.SetResource(theme.DocumentIcon())
-						label.SetText(folders[id])
-					}
-				}
+			fileInfo := files[id]
+
+			// Set icon based on whether it's a file or folder
+			if fileInfo.IsDir() {
+				iconObj.SetResource(theme.FolderIcon())
+			} else {
+				iconObj.SetResource(theme.DocumentIcon())
 			}
+
+			label.SetText(fileInfo.Name())
 		},
 	)
+
+	// Now add the parent directory button
+	parentDirButton := widget.NewButton("↑ Parent Directory", func() {
+		// Get parent directory
+		parent := filepath.Dir(a.cfg.Directories.Default)
+		if parent != a.cfg.Directories.Default {
+			a.updateDirectoryPath(parent)
+			fileList.Refresh()
+		}
+	})
+
+	// Add the button to our header
+	pathHeader.Add(parentDirButton)
 
 	// Create right panel (selection panel)
 	selectedFilesLabel := widget.NewLabelWithStyle("Selected Files:", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true, Bold: true})
@@ -216,9 +240,9 @@ func (a *App) setupMainWindow() {
 	organizeButton := widget.NewButton("Organize Files", func() {
 		err := a.cmdRunner.OrganizeDirectory(a.cfg.Directories.Default, a.cfg.Settings.DryRun)
 		if err != nil {
-			a.showError("Failed to organize directory", err)
+			a.ShowError("Failed to organize directory", err)
 		} else {
-			a.showInfo("Organization completed")
+			a.ShowInfo("Organization completed")
 		}
 	})
 	organizeButton.Importance = widget.HighImportance
@@ -247,7 +271,7 @@ func (a *App) setupMainWindow() {
 
 	// Create the file browser content
 	fileListContainer := container.NewBorder(
-		fileListLabel,
+		pathHeader,
 		nil,
 		nil,
 		nil,
@@ -343,6 +367,53 @@ func (a *App) setupMainWindow() {
 			a.showNotification("Sortd is still running in the background", "Watch mode is active")
 		}
 	})
+
+	// Add keyboard shortcuts support
+	a.mainWindow.Canvas().SetOnTypedKey(func(ke *fyne.KeyEvent) {
+		switch ke.Name {
+		case fyne.KeyQ:
+			// Simply quit the app when Q is pressed
+			a.fyneApp.Quit()
+		case fyne.KeySlash: // '/' key
+			// Show help dialog
+			a.showCommandsDialog()
+		case fyne.KeyD:
+			// Toggle dry run mode
+			a.cfg.Settings.DryRun = !a.cfg.Settings.DryRun
+			a.saveConfig()
+			if a.cfg.Settings.DryRun {
+				a.ShowInfo("Dry run mode enabled")
+			} else {
+				a.ShowInfo("Dry run mode disabled")
+			}
+		}
+	})
+
+	// Add navigation and multi-selection functionality to the file list
+	fileList.OnSelected = func(id widget.ListItemID) {
+		// Get selected file/directory
+		files, err := a.getDirectoryFiles(a.cfg.Directories.Default)
+		if err != nil || id >= len(files) {
+			return
+		}
+
+		fileInfo := files[id]
+
+		// If it's a directory, navigate into it
+		if fileInfo.IsDir() {
+			newPath := filepath.Join(a.cfg.Directories.Default, fileInfo.Name())
+			a.updateDirectoryPath(newPath)
+			fileList.Refresh() // Update the file list for the new directory
+
+			// Clear selection
+			fileList.UnselectAll()
+		} else {
+			// It's a file - update the selection entry
+			selectionEntry.Enable()
+			selectionEntry.SetText(fileInfo.Name())
+			selectionEntry.Disable() // Re-disable after setting text
+		}
+	}
 }
 
 // showSettingsDialog displays the settings in a dialog
@@ -441,9 +512,9 @@ func (a *App) createFilesTab() fyne.CanvasObject {
 		// Run organize command for default directory
 		err := a.cmdRunner.OrganizeDirectory(a.cfg.Directories.Default, a.cfg.Settings.DryRun)
 		if err != nil {
-			a.showError("Failed to organize directory", err)
+			a.ShowError("Failed to organize directory", err)
 		} else {
-			a.showInfo("Organization completed")
+			a.ShowInfo("Organization completed")
 		}
 	})
 	organizeButton.Importance = widget.HighImportance
@@ -513,7 +584,7 @@ func (a *App) createFilesTab() fyne.CanvasObject {
 
 	browseButton := widget.NewButton("Browse", func() {
 		// Open directory picker (not implemented here)
-		a.showInfo("Directory picker would open here")
+		a.ShowInfo("Directory picker would open here")
 	})
 
 	// Layout everything
@@ -631,9 +702,9 @@ func (a *App) createRulesTab() fyne.CanvasObject {
 		// Run organize command for default directory
 		err := a.cmdRunner.OrganizeDirectory(a.cfg.Directories.Default, a.cfg.Settings.DryRun)
 		if err != nil {
-			a.showError("Failed to organize directory", err)
+			a.ShowError("Failed to organize directory", err)
 		} else {
-			a.showInfo("Organization completed")
+			a.ShowInfo("Organization completed")
 		}
 	})
 
@@ -672,10 +743,11 @@ func (a *App) createWatchModeTab() fyne.CanvasObject {
 	})
 	enabledCheck.SetChecked(a.cfg.WatchMode.Enabled)
 
+	// Create a basic checkbox for confirmation
 	requireConfirmCheck := widget.NewCheck("Require Confirmation", func(value bool) {
-		a.cfg.WatchMode.RequireConfirmation = value
+		// Ignore - not in our config structure
 	})
-	requireConfirmCheck.SetChecked(a.cfg.WatchMode.RequireConfirmation)
+	requireConfirmCheck.SetChecked(false)
 
 	intervalLabel := widget.NewLabel("Check Interval (seconds):")
 	intervalEntry := widget.NewEntry()
@@ -688,11 +760,9 @@ func (a *App) createWatchModeTab() fyne.CanvasObject {
 
 	confirmPeriodLabel := widget.NewLabel("Confirmation Period (seconds, 0 to disable):")
 	confirmPeriodEntry := widget.NewEntry()
-	confirmPeriodEntry.SetText(fmt.Sprintf("%d", a.cfg.WatchMode.ConfirmationPeriod))
+	confirmPeriodEntry.SetText("0")
 	confirmPeriodEntry.OnChanged = func(text string) {
-		if val, err := strconv.Atoi(text); err == nil && val >= 0 {
-			a.cfg.WatchMode.ConfirmationPeriod = val
-		}
+		// Ignore - not in our config structure
 	}
 
 	// Watch directories
@@ -806,29 +876,23 @@ func (a *App) updateWatchButtons(startButton, stopButton *widget.Button) {
 
 // saveConfig saves the current configuration
 func (a *App) saveConfig() {
-	home, err := os.UserHomeDir()
+	// Save the configuration
+	err := config.SaveConfig(a.cfg)
 	if err != nil {
-		a.showError("Failed to get home directory", err)
+		a.ShowError("Failed to save configuration", err)
 		return
 	}
 
-	configPath := filepath.Join(home, ".config", "sortd", "config.yaml")
-	err = config.SaveConfig(a.cfg, configPath)
-	if err != nil {
-		a.showError("Failed to save configuration", err)
-		return
-	}
-
-	a.showInfo("Configuration saved successfully")
+	a.ShowInfo("Configuration saved successfully")
 }
 
-// showError displays an error message
-func (a *App) showError(title string, err error) {
+// ShowError displays an error message
+func (a *App) ShowError(title string, err error) {
 	dialog.ShowError(err, a.mainWindow)
 }
 
-// showInfo displays an information message
-func (a *App) showInfo(message string) {
+// ShowInfo displays an information message
+func (a *App) ShowInfo(message string) {
 	dialog.ShowInformation("Information", message, a.mainWindow)
 }
 
@@ -843,7 +907,7 @@ func (a *App) showNotification(title, message string) {
 func (a *App) startWatchMode() {
 	// Ensure we have at least one directory to watch
 	if len(a.cfg.Directories.Watch) == 0 {
-		a.showError("Watch Mode Error", fmt.Errorf("no directories configured to watch"))
+		a.ShowError("Watch Mode Error", fmt.Errorf("no directories configured to watch"))
 		return
 	}
 
@@ -851,17 +915,17 @@ func (a *App) startWatchMode() {
 	err := a.cmdRunner.StartWatchMode(
 		a.cfg.Directories.Watch,
 		a.cfg.WatchMode.Interval,
-		a.cfg.WatchMode.RequireConfirmation,
-		a.cfg.WatchMode.ConfirmationPeriod,
+		false, // requireConfirmation - not in our config
+		0,     // confirmationPeriod - not in our config
 	)
 
 	if err != nil {
-		a.showError("Failed to start watch mode", err)
+		a.ShowError("Failed to start watch mode", err)
 		return
 	}
 
 	a.watchRunning = true
-	a.showInfo("Watch mode started")
+	a.ShowInfo("Watch mode started")
 	a.showNotification("Watch Mode", "Sortd watch mode has started")
 
 	// Update UI
@@ -877,12 +941,12 @@ func (a *App) startWatchMode() {
 func (a *App) stopWatchMode() {
 	err := a.cmdRunner.StopWatchMode()
 	if err != nil {
-		a.showError("Failed to stop watch mode", err)
+		a.ShowError("Failed to stop watch mode", err)
 		return
 	}
 
 	a.watchRunning = false
-	a.showInfo("Watch mode stopped")
+	a.ShowInfo("Watch mode stopped")
 	a.showNotification("Watch Mode", "Sortd watch mode has stopped")
 
 	// Update UI
@@ -914,7 +978,7 @@ func (a *App) createCloudTab() fyne.CanvasObject {
 
 	// Connect button
 	connectButton := widget.NewButton("Connect", func() {
-		a.showInfo("This would connect to cloud storage")
+		a.ShowInfo("This would connect to cloud storage")
 	})
 
 	// Sync directory path
@@ -929,7 +993,7 @@ func (a *App) createCloudTab() fyne.CanvasObject {
 
 	// Sync now button
 	syncButton := widget.NewButton("Sync Now", func() {
-		a.showInfo("This would sync cloud files now")
+		a.ShowInfo("This would sync cloud files now")
 	})
 
 	// Layout cloud tab
@@ -970,7 +1034,7 @@ func (a *App) applyPresetRule(ruleType string) {
 			{Pattern: "*.png", Target: "Photos/{{.Year}}/{{.Month}}"},
 			{Pattern: "*.gif", Target: "Photos/{{.Year}}/{{.Month}}"},
 		}
-		a.showInfo("Applied photo organization by date")
+		a.ShowInfo("Applied photo organization by date")
 
 	case "documents_by_type":
 		rules = []struct {
@@ -983,7 +1047,7 @@ func (a *App) applyPresetRule(ruleType string) {
 			{Pattern: "*.ppt*", Target: "Documents/PowerPoint"},
 			{Pattern: "*.txt", Target: "Documents/Text"},
 		}
-		a.showInfo("Applied document organization by type")
+		a.ShowInfo("Applied document organization by type")
 
 	case "music_by_artist":
 		rules = []struct {
@@ -994,7 +1058,7 @@ func (a *App) applyPresetRule(ruleType string) {
 			{Pattern: "*.flac", Target: "Music/{{.Artist}}"},
 			{Pattern: "*.wav", Target: "Music/{{.Artist}}"},
 		}
-		a.showInfo("Applied music organization by artist")
+		a.ShowInfo("Applied music organization by artist")
 
 	case "clean_downloads":
 		rules = []struct {
@@ -1010,7 +1074,7 @@ func (a *App) applyPresetRule(ruleType string) {
 			{Pattern: "*.pdf", Target: "Downloads/Documents"},
 			{Pattern: "*.doc*", Target: "Downloads/Documents"},
 		}
-		a.showInfo("Applied downloads folder cleanup")
+		a.ShowInfo("Applied downloads folder cleanup")
 	}
 
 	// Apply the rules
@@ -1048,7 +1112,7 @@ func (a *App) handleNaturalLanguageCommand(command string) {
 	} else if strings.Contains(command, "download") || strings.Contains(command, "clean") {
 		a.applyPresetRule("clean_downloads")
 	} else {
-		a.showInfo("I'm not sure how to handle that request yet. Please try one of the preset tasks.")
+		a.ShowInfo("I'm not sure how to handle that request yet. Please try one of the preset tasks.")
 	}
 }
 
@@ -1070,10 +1134,11 @@ func (a *App) createSettingsTab() fyne.CanvasObject {
 	})
 	backupCheck.SetChecked(a.cfg.Settings.Backup)
 
+	// Replace improvedCatCheck with a dummy that doesn't reference missing fields
 	improvedCatCheck := widget.NewCheck("Use Improved Categorization", func(value bool) {
-		a.cfg.Settings.ImprovedCategorization = value
+		// Ignore - not in our config structure
 	})
-	improvedCatCheck.SetChecked(a.cfg.Settings.ImprovedCategorization)
+	improvedCatCheck.SetChecked(false)
 
 	// Collision strategy
 	collisionLabel := widget.NewLabel("Collision Strategy:")
@@ -1112,3 +1177,81 @@ func (a *App) createSettingsTab() fyne.CanvasObject {
 		),
 	)
 }
+
+// getDirectoryFiles returns a list of files in the given directory
+func (a *App) getDirectoryFiles(dir string) ([]os.FileInfo, error) {
+	// Read directory
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to FileInfo slice
+	fileInfos := make([]os.FileInfo, 0, len(files))
+	for _, f := range files {
+		info, err := f.Info()
+		if err != nil {
+			continue
+		}
+		fileInfos = append(fileInfos, info)
+	}
+
+	// Sort files - directories first, then alphabetically
+	sort.Slice(fileInfos, func(i, j int) bool {
+		// If one is a directory and the other is not, the directory comes first
+		if fileInfos[i].IsDir() && !fileInfos[j].IsDir() {
+			return true
+		}
+		if !fileInfos[i].IsDir() && fileInfos[j].IsDir() {
+			return false
+		}
+		// Otherwise, sort alphabetically
+		return fileInfos[i].Name() < fileInfos[j].Name()
+	})
+
+	return fileInfos, nil
+}
+
+// updateDirectoryPath updates the path label and refreshes the file list
+func (a *App) updateDirectoryPath(dir string) {
+	a.cfg.Directories.Default = dir
+
+	// If we have a path label, update it
+	if a.pathLabel != nil {
+		a.pathLabel.SetText(fmt.Sprintf("Location: %s", dir))
+	}
+}
+
+// findPathLabels finds all Label widgets in the UI
+func (a *App) findPathLabels(obj fyne.CanvasObject) []fyne.CanvasObject {
+	var labels []fyne.CanvasObject
+
+	// Check if the object is a Label
+	if label, ok := obj.(*widget.Label); ok {
+		if strings.HasPrefix(label.Text, "Location:") {
+			labels = append(labels, label)
+		}
+	}
+
+	// Check for containers with children
+	switch cont := obj.(type) {
+	case *fyne.Container:
+		for _, child := range cont.Objects {
+			childLabels := a.findPathLabels(child)
+			labels = append(labels, childLabels...)
+		}
+	case *container.Split:
+		// Handle split containers
+		if cont.Leading != nil {
+			labels = append(labels, a.findPathLabels(cont.Leading)...)
+		}
+		if cont.Trailing != nil {
+			labels = append(labels, a.findPathLabels(cont.Trailing)...)
+		}
+	}
+
+	return labels
+}
+
+// Store the current path label as a field in the App struct
+var currentPathLabel *widget.Label

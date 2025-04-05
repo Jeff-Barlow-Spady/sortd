@@ -4,11 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
-	"path/filepath"
 	"strings"
-	"syscall"
-	"time"
 
 	"sortd/internal/config"
 	"sortd/internal/log"
@@ -28,19 +24,26 @@ func NewRootCmd() *cobra.Command {
 		Use:   "sortd",
 		Short: "Organizing Files Doesn't Have To Suck",
 		Long: func() string {
-			// Create a colorful ASCII logo that respects the theme
-			// This function will be called after the config is loaded
+			// Create a colorful ASCII logo in DOS Rebel style
 			logo := `
-	` + colorize("::######:::'#######::'########::'########:'########::", Color("99")) + `
-	` + colorize("'##... ##:'##.... ##: ##.... ##:... ##..:: ##.... ##:", Color("134")) + `
-	` + colorize("'##:::..:: ##:::: ##: ##:::: ##:::: ##:::: ##:::: ##:", Color("171")) + `
-	` + colorize(". ######:: ##:::: ##: ########::::: ##:::: ##:::: ##:", Color("213")) + `
-	` + colorize("::.... ##: ##:::: ##: ##.. ##:::::: ##:::: ##:::: ##:", Color("212")) + `
-	` + colorize("'##::: ##: ##:::: ##: ##::. ##::::: ##:::: ##:::: ##:", Color("211")) + `
-	` + colorize(". ######::. #######:: ##:::. ##:::: ##:::: ########::", Color("204")) + `
-	` + colorize(":......::::.......:::..:::::..:::::..:::::........:::", Color("203")) + `
+    ` + colorize("██████   ██████  ██████  ████████ ██████", Color("99")) + `
+    ` + colorize("██       ██    ██ ██   ██    ██    ██   ██", Color("134")) + `
+    ` + colorize("███████  ██    ██ ██████     ██    ██   ██", Color("171")) + `
+    ` + colorize("     ██  ██    ██ ██   ██    ██    ██   ██", Color("213")) + `
+    ` + colorize("██████    ██████  ██   ██    ██    ██████", Color("212")) + `
+    ` + colorize("                                         ", Color("211")) + `
+    ` + colorize("      FILE ORGANIZATION SYSTEM           ", Color("213")) + `
 
-` + primaryText("Sortd") + ` helps you organize files in an ` + emphasisText("interactive") + `, ` + colorize("fun", Color("211")) + ` way!
+` + primaryText("Sortd") + ` helps you organize files with vim-like keybindings and powerful rules.
+
+` + successText("QUICK START:") + `
+  • Run ` + emphasisText("sortd setup") + ` to configure your preferences
+  • Use ` + emphasisText("sortd organize ~/Downloads") + ` to organize a directory
+  • Start ` + emphasisText("sortd") + ` without arguments to enter the TUI file browser
+  • Try ` + emphasisText("sortd watch") + ` to automatically organize files as they arrive
+  • Launch the GUI with ` + emphasisText("sortd gui") + `
+
+` + infoText("TIP:") + ` The TUI uses vim-style keybindings (j/k navigate, space selects files, ? for help)
 			`
 			return logo
 		}(),
@@ -85,163 +88,23 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(NewWatchCmd())
 	rootCmd.AddCommand(NewDaemonCmd())
 	rootCmd.AddCommand(NewVersionCmd())
-	rootCmd.AddCommand(NewThemeCmd())
+	// rootCmd.AddCommand(NewThemeCmd()) // Theme functionality is not yet implemented
 	rootCmd.AddCommand(NewCloudCmd())
 	rootCmd.AddCommand(NewAnalyzeCmd())
 	rootCmd.AddCommand(NewScanCmd())
-	rootCmd.AddCommand(NewConfirmCmd()) // Add the confirm command
-	rootCmd.AddCommand(NewGUICmd())     // Add the GUI command
+	rootCmd.AddCommand(NewConfirmCmd())
+	rootCmd.AddCommand(NewGUICmd())
 
 	return rootCmd
 }
 
 // NewThemeCmd creates the theme command
+/*
 func NewThemeCmd() *cobra.Command {
-	var interactive bool
-
-	cmd := &cobra.Command{
-		Use:   "theme [theme-name]",
-		Short: "Set or view the current theme",
-		Long:  `Set the theme for sortd or view the current theme if no theme name is provided.`,
-		Run: func(cmd *cobra.Command, args []string) {
-			// Load current config
-			currentCfg, _ := config.LoadConfig()
-
-			// If no args, just display the current theme
-			if len(args) == 0 {
-				// If theme name is empty, set a default
-				if currentCfg.Theme.Name == "" {
-					currentCfg.Theme.Name = "default"
-				}
-
-				fmt.Println(infoText("Current theme: " + currentCfg.Theme.Name))
-
-				fmt.Println("\nAvailable themes:")
-				for _, name := range config.ListThemes() {
-					if name == currentCfg.Theme.Name {
-						fmt.Println("  " + successText(name+" (current)"))
-					} else {
-						fmt.Println("  " + name)
-					}
-				}
-
-				// Show a sample of the current theme colors with color blocks for better visibility
-				fmt.Println("\nTheme color samples:")
-				fmt.Println(colorize("  Primary color", Color(currentCfg.Theme.Primary)))
-				fmt.Println(colorize("✓ Success color", Color(currentCfg.Theme.Success)))
-				fmt.Println(colorize("⚠ Warning color", Color(currentCfg.Theme.Warning)))
-				fmt.Println(colorize("✗ Error color", Color(currentCfg.Theme.Error)))
-				fmt.Println(colorize("ℹ Info color", Color(currentCfg.Theme.Info)))
-				fmt.Println(colorize("  Emphasis color", Color(currentCfg.Theme.Emphasis)))
-				fmt.Print(frame("  Border color sample", Color(currentCfg.Theme.Border)))
-
-				// If interactive mode is enabled, allow the user to choose a theme
-				if interactive {
-					// Check if gum is installed
-					if _, err := exec.LookPath("gum"); err != nil {
-						fmt.Println(errorText("Interactive mode requires gum to be installed."))
-						fmt.Println(infoText("Install Gum from https://github.com/charmbracelet/gum"))
-						return
-					}
-
-					fmt.Println(infoText("\nSelect a theme to apply (Press Ctrl+C to exit):"))
-
-					// Create a channel to handle interruption signals
-					sigChan := make(chan os.Signal, 1)
-					signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-					// Set a timeout for theme selection
-					timeout := time.NewTimer(time.Second * 120) // 2 minute timeout
-
-					// Run the theme selection in a goroutine
-					themeChan := make(chan string, 1)
-					go func() {
-						selectedTheme := runGumChoose(config.ListThemes()...)
-						themeChan <- selectedTheme
-					}()
-
-					// Wait for either a theme selection, signal, or timeout
-					select {
-					case selectedTheme := <-themeChan:
-						if selectedTheme == "" {
-							// User cancelled the selection
-							fmt.Println(infoText("\nTheme selection cancelled"))
-							return
-						}
-
-						// Apply the selected theme
-						currentCfg.ApplyTheme(selectedTheme)
-
-						// Save the updated config
-						home, _ := os.UserHomeDir()
-						configPath := filepath.Join(home, ".config", "sortd", "config.yaml")
-						if err := config.SaveConfig(currentCfg, configPath); err != nil {
-							fmt.Println(errorText("Failed to save theme: " + err.Error()))
-							return
-						}
-
-						// Apply the theme to the current session
-						cfg = currentCfg
-
-						fmt.Println(successText("Theme set to " + selectedTheme))
-						fmt.Println(infoText("Theme applied to current session"))
-
-					case <-sigChan:
-						fmt.Println(infoText("\nTheme selection cancelled"))
-						return
-
-					case <-timeout.C:
-						fmt.Println(infoText("\nTheme selection timed out"))
-						return
-					}
-				}
-
-				return
-			}
-
-			// Get the new theme name
-			themeName := args[0]
-
-			// Check if the theme exists
-			themes := config.ListThemes()
-			validTheme := false
-			for _, name := range themes {
-				if name == themeName {
-					validTheme = true
-					break
-				}
-			}
-
-			if !validTheme {
-				fmt.Println(errorText("Invalid theme: " + themeName))
-				fmt.Println(infoText("Available themes: " + strings.Join(themes, ", ")))
-				return
-			}
-
-			// Apply the new theme to the config
-			currentCfg.ApplyTheme(themeName)
-
-			// Save the updated config
-			home, _ := os.UserHomeDir()
-			configPath := filepath.Join(home, ".config", "sortd", "config.yaml")
-			if err := config.SaveConfig(currentCfg, configPath); err != nil {
-				fmt.Println(errorText("Failed to save theme: " + err.Error()))
-				return
-			}
-
-			// Apply the theme to the current session
-			cfg = currentCfg
-
-			fmt.Println(successText("Theme set to " + themeName))
-			fmt.Println(infoText("Theme applied to current session"))
-		},
-	}
-
-	// Add interactive flag
-	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Choose theme interactively")
-
-	return cmd
+	// This function is commented out until the theme functionality is implemented in the config package
+	return nil
 }
+*/
 
 // NewVersionCmd creates the version command
 func NewVersionCmd() *cobra.Command {
@@ -250,9 +113,9 @@ func NewVersionCmd() *cobra.Command {
 		Short: "Print the version number of sortd",
 		Long:  `All software has versions. This is sortd's.`,
 		Run: func(cmd *cobra.Command, args []string) {
-			// Use our new style helpers
+			// Use our new style helpers with a fixed color instead of cfg.Theme.Border
 			versionText := bold(emphasisText("sortd version 0.1.0"))
-			fmt.Print(frame(versionText, Color(cfg.Theme.Border)))
+			fmt.Print(frame(versionText, Color("39"))) // Use a light blue color instead
 		},
 	}
 }
@@ -314,13 +177,12 @@ func runGumChoose(options ...string) string {
 	// Default to the first option if Gum fails
 	defaultOption := options[0]
 
-	// Basic implementation for non-theme use cases
-	if !isThemeChoice(options) {
-		args := []string{"choose"}
-		args = append(args, options...)
-		return runGumWithDefault(defaultOption, args...)
-	}
+	// Simplified implementation without theme checking
+	args := []string{"choose"}
+	args = append(args, options...)
+	return runGumWithDefault(defaultOption, args...)
 
+	/* Theme functionality currently not implemented
 	// Enhanced implementation for theme selection
 	// Prepare a list of themed options with their respective colors
 	var themedOptions []string
@@ -331,39 +193,15 @@ func runGumChoose(options ...string) string {
 		themedOption := colorizeWithColor(themeName, theme["primary"])
 		themedOptions = append(themedOptions, themedOption)
 	}
-
-	// Use gum choose with styled options and header
-	args := []string{"choose",
-		"--header", "Use arrow keys to navigate, space to select",
-		"--header.foreground", "39", // Blue for header
-		"--cursor.foreground", "213", // Highlight for cursor
-		"--selected.foreground", "114", // Green for selected item
-		"--height", "10"}
-	args = append(args, themedOptions...)
-
-	// Run gum with styled options
-	result := runGumWithDefault("", args...)
-
-	// If Gum failed and returned the default (empty string), use the first theme
-	if result == "" {
-		fmt.Println(infoText(fmt.Sprintf("Falling back to default theme: %s", defaultOption)))
-		return defaultOption
-	}
-
-	// Extract the theme name by stripping ANSI codes
-	for _, themeName := range options {
-		if strings.Contains(result, themeName) {
-			return themeName
-		}
-	}
-
-	// If we can't find the theme name, fallback to the default
-	fmt.Println(infoText(fmt.Sprintf("Could not parse theme selection, using default: %s", defaultOption)))
-	return defaultOption
+	*/
 }
 
 // Helper to determine if this is a theme choice (list of theme names)
 func isThemeChoice(options []string) bool {
+	// Always return false since theme functionality is not implemented
+	return false
+
+	/* Original implementation
 	if len(options) == 0 {
 		return false
 	}
@@ -384,6 +222,7 @@ func isThemeChoice(options []string) bool {
 
 	// If most options are valid themes, consider it a theme choice
 	return themeCount >= len(options)/2
+	*/
 }
 
 // Helper function to colorize text with a specified color
@@ -466,50 +305,38 @@ func frame(text string, color Color) string {
 
 // successText formats text as a success message
 func successText(text string) string {
-	if cfg == nil {
-		return colorize("✓ "+text, "114") // Default green
-	}
-	return colorize("✓ "+text, Color(cfg.Theme.Success))
+	// Always use default color
+	return colorize("✓ "+text, "114") // Default green
 }
 
 // warningText formats text as a warning message
 func warningText(text string) string {
-	if cfg == nil {
-		return colorize("⚠ "+text, "220") // Default yellow
-	}
-	return colorize("⚠ "+text, Color(cfg.Theme.Warning))
+	// Always use default color
+	return colorize("⚠ "+text, "220") // Default yellow
 }
 
 // errorText formats text as an error message
 func errorText(text string) string {
-	if cfg == nil {
-		return colorize("✗ "+text, "196") // Default red
-	}
-	return colorize("✗ "+text, Color(cfg.Theme.Error))
+	// Always use default color
+	return colorize("✗ "+text, "196") // Default red
 }
 
 // infoText formats text as an informational message
 func infoText(text string) string {
-	if cfg == nil {
-		return colorize("ℹ "+text, "39") // Default blue
-	}
-	return colorize("ℹ "+text, Color(cfg.Theme.Info))
+	// Always use default color
+	return colorize("ℹ "+text, "39") // Default blue
 }
 
 // primaryText formats text with the primary theme color
 func primaryText(text string) string {
-	if cfg == nil {
-		return colorize(text, "213") // Default purple
-	}
-	return colorize(text, Color(cfg.Theme.Primary))
+	// Always use default color
+	return colorize(text, "213") // Default purple
 }
 
 // emphasisText formats text with the emphasis color
 func emphasisText(text string) string {
-	if cfg == nil {
-		return colorize(text, "212") // Default light pink
-	}
-	return colorize(text, Color(cfg.Theme.Emphasis))
+	// Always use default color
+	return colorize(text, "212") // Default light pink
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
