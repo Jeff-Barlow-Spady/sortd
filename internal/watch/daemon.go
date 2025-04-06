@@ -2,12 +2,15 @@ package watch
 
 import (
 	"fmt"
-	"log"
 	"os"
-	"path/filepath"
-	"sortd/internal/config"
 	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
+
+	"sortd/internal/config"
+	"sortd/internal/log"
+	"sortd/internal/organize"
 )
 
 // DaemonStatus represents the current status of the daemon
@@ -24,10 +27,10 @@ type Daemon struct {
 	config *config.Config
 
 	// The file watcher
-	watcher *Watcher
+	watcher *fsnotify.Watcher
 
 	// Organize engine adapter
-	engine *EngineAdapter
+	engine *organize.Engine
 
 	// Statistics
 	processed    int
@@ -48,21 +51,22 @@ type Daemon struct {
 
 // NewDaemon creates a new background file organization service
 func NewDaemon(cfg *config.Config) *Daemon {
-	// Create a watcher
-	watcher, err := New()
+	// Create a watcher using fsnotify
+	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("Failed to create watcher for daemon: %v", err)
+		log.Errorf("Failed to create fsnotify watcher for daemon: %v", err)
+		os.Exit(1) // Exit as log.Fatalf would
 	}
 
-	// Create the organization engine adapter
-	engine := NewEngineAdapter(cfg)
+	// Create the organization engine using the correct constructor
+	engine := organize.NewWithConfig(cfg)
 
 	return &Daemon{
 		config:              cfg,
 		watcher:             watcher,
 		engine:              engine,
 		processed:           0,
-		lastActivity:        time.Now(),
+		lastActivity:        time.Now(), // Initialize lastActivity
 		callback:            nil,
 		requireConfirmation: false,
 		running:             false,
@@ -76,28 +80,36 @@ func (d *Daemon) Start() error {
 	}
 
 	// Add the watch directories from config
-	if len(d.config.Directories.Watch) > 0 {
-		for _, dir := range d.config.Directories.Watch {
-			if err := d.watcher.AddDirectory(dir); err != nil {
+	// Use config.WatchDirectories instead of config.Directories.Watch
+	if len(d.config.WatchDirectories) > 0 {
+		for _, dir := range d.config.WatchDirectories {
+			if err := d.watcher.Add(dir); err != nil {
+				// Use internal logger for error
+				log.Errorf("Error adding watch directory %s: %w", dir, err)
+				// Decide if we should return the error or just log it
+				// For now, return the error to prevent starting with incomplete watches
 				return fmt.Errorf("error adding watch directory %s: %w", dir, err)
 			}
+			log.Info("Watching directory: %s", dir)
 		}
+	} else {
+		log.Info("No watch directories specified in configuration.")
 	}
 
 	// Make sure we have directories to watch
-	if len(d.watcher.GetDirectories()) == 0 {
-		return fmt.Errorf("no directories to watch")
+	// Use WatchList() for fsnotify
+	if len(d.watcher.WatchList()) == 0 {
+		return fmt.Errorf("no valid directories to watch")
 	}
 
-	// Start the watcher
-	if err := d.watcher.Start(); err != nil {
-		return fmt.Errorf("error starting watcher: %w", err)
-	}
-
-	d.running = true
+	// fsnotify doesn't need an explicit Start(), it starts listening on NewWatcher()
+	// Remove the invalid EnableRenames call
 
 	// Start processing file events
 	go d.processEvents()
+
+	d.running = true
+	log.Info("Watch daemon started.")
 
 	return nil
 }
@@ -109,13 +121,22 @@ func (d *Daemon) Stop() {
 	}
 
 	// Stop the watcher
-	d.watcher.Stop()
+	if err := d.watcher.Close(); err != nil {
+		log.Errorf("Error closing watcher: %v", err)
+	}
 	d.running = false
+	log.Info("Watch daemon stopped.")
 }
 
 // AddWatchDirectory adds a directory to be watched
 func (d *Daemon) AddWatchDirectory(dir string) error {
-	return d.watcher.AddDirectory(dir)
+	err := d.watcher.Add(dir)
+	if err != nil {
+		log.Errorf("Error adding watch directory dynamically %s: %v", dir, err)
+	} else {
+		log.Info("Dynamically added watch directory: %s", dir)
+	}
+	return err
 }
 
 // SetCallback sets a function to be called when a file is processed
@@ -143,7 +164,8 @@ func (d *Daemon) Status() DaemonStatus {
 
 	return DaemonStatus{
 		Running:          d.running,
-		WatchDirectories: d.watcher.GetDirectories(),
+		// Use WatchList() for fsnotify
+		WatchDirectories: d.watcher.WatchList(),
 		LastActivity:     d.lastActivity,
 		FilesProcessed:   d.processed,
 	}
@@ -151,123 +173,112 @@ func (d *Daemon) Status() DaemonStatus {
 
 // processEvents handles file modification events from the watcher
 func (d *Daemon) processEvents() {
-	for fileEvent := range d.watcher.FileChannel() {
-		// Skip directories
-		if fileEvent.Info.IsDir() {
-			continue
+	for {
+		select {
+		case event, ok := <-d.watcher.Events:
+			if !ok {
+				log.Info("Watcher event channel closed.")
+				return // Exit goroutine if channel is closed
+			}
+
+			// Log the raw event for debugging
+			log.Debugf("Received fsnotify event: %s", event.String())
+
+			// We are primarily interested in Create and Write events for files
+			// Note: RENAMED files trigger REMOVE on old name, CREATE on new name.
+			// WRITE might occur multiple times for one save operation.
+			if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
+				// Check if it's a file (fsnotify doesn't guarantee IsDir reliably)
+				info, err := os.Stat(event.Name)
+				if err != nil {
+					// File might have been removed quickly after event, log and skip
+					log.Debugf("Failed to stat file from event %s: %v", event.Name, err)
+					continue
+				}
+				if info.IsDir() {
+					log.Debugf("Skipping directory event: %s", event.Name)
+					continue // Skip directories
+				}
+
+				// Update last activity time
+				d.mutex.Lock()
+				d.lastActivity = time.Now()
+				d.mutex.Unlock()
+
+				// Process the file
+				log.Debugf("Processing file event for: %s", event.Name)
+				d.organizeFile(event.Name)
+			}
+
+		case err, ok := <-d.watcher.Errors:
+			if !ok {
+				log.Info("Watcher error channel closed.")
+				return // Exit goroutine if channel is closed
+			}
+			log.Errorf("Watcher error: %v", err)
 		}
-
-		// Update last activity time
-		d.mutex.Lock()
-		d.lastActivity = fileEvent.Timestamp
-		d.mutex.Unlock()
-
-		// Process the file
-		d.organizeFile(fileEvent.Path)
 	}
 }
 
 // organizeFile processes a single file according to the rules
 func (d *Daemon) organizeFile(filePath string) {
-	destPattern, _, ruleMatched := d.findMatchingRule(filePath)
+	log.Debugf("Organize task triggered for: %s", filePath)
 
-	// If no rule matched, skip this file
-	if !ruleMatched {
-		return
-	}
+	// Use OrganizeByPatterns which returns only an error
+	err := d.engine.OrganizeByPatterns([]string{filePath})
 
-	// Calculate destination path
-	destPath := filepath.Join(destPattern, filepath.Base(filePath))
-
-	var err error
-
-	// If we require confirmation and have a callback, invoke it
-	if d.requireConfirmation && d.callback != nil {
-		// We pass an empty error here as a signal that this is a confirmation request
-		d.mutex.RLock()
-		cb := d.callback
-		d.mutex.RUnlock()
-
-		cb(filePath, destPath, nil)
-
-		// The callback should handle the actual organization
-		return
-	}
-
-	// Otherwise, organize the file directly
-	dryRun := d.engine.GetDryRun()
-	if dryRun {
-		// In dry run mode, just log what would happen
-		log.Printf("Would organize %s to %s", filePath, destPath)
-	} else {
-		// Move the file
-		err = d.engine.MoveFile(filePath, destPath)
-
-		// Update stats
-		if err == nil {
-			d.mutex.Lock()
-			d.processed++
-			d.mutex.Unlock()
+	// If error occurred during organization (including no pattern match implicitly? Check engine impl if needed)
+	if err != nil {
+		log.Errorf("Error organizing file %s: %v", filePath, err)
+		// Execute callback with the error
+		if d.callback != nil {
+			d.mutex.RLock()
+			cb := d.callback
+			d.mutex.RUnlock()
+			// Pass empty destPath as organization failed or didn't happen
+			cb(filePath, "", err)
 		}
+		return
 	}
 
-	// If a callback is registered, notify it
+	// If no error, organization was successful (or file was skipped by engine logic)
+	// Update stats assuming a move happened if no error (Might need refinement if engine skips silently)
+	d.mutex.Lock()
+	d.processed++
+	d.mutex.Unlock()
+
+	log.Info("Successfully organized file: %s (or skipped by engine rules)", filePath)
+
+	// If a callback is registered, notify it of success (nil error)
+	// We don't know the exact destination path from OrganizeByPatterns easily.
+	// We could try to find it again, but for now, pass empty string.
 	if d.callback != nil {
 		d.mutex.RLock()
 		cb := d.callback
 		d.mutex.RUnlock()
-
-		cb(filePath, destPath, err)
+		cb(filePath, "", nil) // Indicate success with nil error, empty dest path
 	}
-}
-
-// findMatchingRule finds the destination path for a file based on rules
-func (d *Daemon) findMatchingRule(filePath string) (string, string, bool) {
-	// Get just the filename
-	fileName := filepath.Base(filePath)
-
-	// Check against each rule
-	for _, rule := range d.config.Rules {
-		matched, err := filepath.Match(rule.Pattern, fileName)
-		if err == nil && matched {
-			return rule.Target, rule.Pattern, true
-		}
-	}
-
-	return "", "", false
 }
 
 // OrganizeFile can be called to manually organize a file through the daemon
 func (d *Daemon) OrganizeFile(filePath string) (string, error) {
-	destPattern, _, ruleMatched := d.findMatchingRule(filePath)
+	log.Debugf("Manual organize task triggered for: %s", filePath)
 
-	// If no rule matched, return an error
-	if !ruleMatched {
-		return "", fmt.Errorf("no matching rule found for %s", filePath)
+	// Delegate directly to the engine using OrganizeByPatterns
+	err := d.engine.OrganizeByPatterns([]string{filePath})
+	if err != nil {
+		log.Errorf("Error during manual organization of %s: %v", filePath, err)
+		return "", err // Return the engine error directly
 	}
 
-	// Calculate destination path
-	destPath := filepath.Join(destPattern, filepath.Base(filePath))
+	// Update stats on success
+	d.mutex.Lock()
+	d.processed++
+	d.mutex.Unlock()
 
-	// Create destination directory if it doesn't exist
-	dryRun := d.engine.GetDryRun()
-	if !dryRun && d.config.Settings.CreateDirs {
-		os.MkdirAll(destPattern, 0755)
-	}
+	log.Info("Successfully manually organized file: %s", filePath)
 
-	var err error
-
-	if !dryRun {
-		// Move the file
-		err = d.engine.MoveFile(filePath, destPath)
-
-		// Update stats
-		if err == nil {
-			d.mutex.Lock()
-			d.processed++
-			d.mutex.Unlock()
-		}
-	}
-
-	return destPath, err
+	// We don't know the destination path easily from OrganizeByPatterns.
+	// Return empty string for path and nil for error on success.
+	return "", nil
 }

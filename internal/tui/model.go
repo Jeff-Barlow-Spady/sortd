@@ -615,8 +615,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Handle list navigation
 		var cmd tea.Cmd
+		var itemToSelect Item // Variable to store item BEFORE list update
+		isSelectKey := false    // Flag to indicate if space was pressed
 
-		// Check for special key handling in list view
+		// Check if the key is 'Select' (space) BEFORE potentially modifying list state
+		if key.Matches(msg, m.keys.Select) {
+			if m.list.SelectedItem() != nil {
+				// Store the item that is *currently* selected
+				itemToSelect = m.list.SelectedItem().(Item)
+				isSelectKey = true
+			} else {
+			}
+		}
+
+		// Check for special key handling in list view that should return early
 		switch {
 		case key.Matches(msg, m.keys.ToggleHelp):
 			m.showFullHelp = !m.showFullHelp
@@ -639,9 +651,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.visualStart = m.list.Index()
 				m.visualEnd = m.list.Index()
 				m.updateVisualSelection()
-				m.setStatusWithFeedback("Visual mode enabled - use up/down to select")
 			} else {
-				m.setStatusWithFeedback("Visual mode disabled")
+				// Keep selections when exiting visual mode
 			}
 			return m, nil
 
@@ -653,7 +664,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				dirName := filepath.Base(parent)
 				m.setStatusWithFeedback(fmt.Sprintf("Changed to parent directory: %s", dirName))
 				if err := m.ScanDirectory(); err != nil {
-					m.setStatusWithFeedback(fmt.Sprintf("Error: %v", err))
+					m.setStatusWithFeedback(fmt.Sprintf("Error scanning directory: %v", err))
 				}
 			} else {
 				m.setStatusWithFeedback("Already at the root directory")
@@ -689,7 +700,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.currentDir = newDir
 					m.setStatusWithFeedback(fmt.Sprintf("Entered directory: %s", file.Name))
 					if err := m.ScanDirectory(); err != nil {
-						m.setStatusWithFeedback(fmt.Sprintf("Error: %v", err))
+						m.setStatusWithFeedback(fmt.Sprintf("Error scanning directory: %v", err))
 					}
 					return m, nil
 				} else {
@@ -782,7 +793,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// For example: results := m.organizeEngine.OrganizeFiles(...)
 
 			// Then provide feedback on the results
-			// This is a placeholder - replace with actual organize logic
 			m.setStatusWithFeedback(fmt.Sprintf("Organized %d files successfully! ✅", selectedCount))
 
 			return m, nil
@@ -857,6 +867,48 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.visualEnd = m.list.Index()
 			m.updateVisualSelection()
 		}
+
+		// --- BEGIN REVISED SELECTION LOGIC ---
+		// If the original key was 'Select', update our selection state based on the item captured *before* the list update.
+		if isSelectKey && itemToSelect.entry.Path != "" { // Check flag and if item was successfully captured
+			path := itemToSelect.entry.Path // Use the path of the item that *was* selected when space was pressed
+			selectedCountBefore := len(m.selectedFiles)
+
+			if _, ok := m.selectedFiles[path]; ok {
+				// Item exists in our map, so deselect it
+				delete(m.selectedFiles, path)
+				// Find the index of the item we toggled to update its visual state
+				currentIndex := -1
+				for i, currentItem := range m.list.Items() {
+					if currentItem.(Item).entry.Path == path {
+						currentIndex = i
+						break
+					}
+				}
+				if currentIndex != -1 {
+					m.updateItemSelection(currentIndex, false) // Restore visual update
+				}
+				m.setStatusWithFeedback(fmt.Sprintf("Deselected '%s' (Before: %d, After: %d)", filepath.Base(path), selectedCountBefore, len(m.selectedFiles)))
+			} else {
+				// Item doesn't exist in our map, so select it
+				m.selectedFiles[path] = true
+				// Find the index of the item we toggled to update its visual state
+				currentIndex := -1
+				for i, currentItem := range m.list.Items() {
+					if currentItem.(Item).entry.Path == path {
+						currentIndex = i
+						break
+					}
+				}
+				if currentIndex != -1 {
+					m.updateItemSelection(currentIndex, true) // Restore visual update
+				}
+				m.setStatusWithFeedback(fmt.Sprintf("Selected '%s' (Before: %d, After: %d)", filepath.Base(path), selectedCountBefore, len(m.selectedFiles)))
+			}
+		} else if isSelectKey {
+			m.setStatusWithFeedback("Select key pressed, but failed to capture item?")
+		}
+		// --- END REVISED SELECTION LOGIC ---
 
 		return m, cmd
 

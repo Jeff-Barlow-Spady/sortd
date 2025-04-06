@@ -29,12 +29,25 @@ func TestRenderHelp(t *testing.T) {
 	help := views.RenderHelp()
 
 	// Verify all key commands are documented
-	assert.Contains(t, help, "j/↓: Move down")
-	assert.Contains(t, help, "k/↑: Move up")
-	assert.Contains(t, help, "enter: Open directory")
-	assert.Contains(t, help, "space: Select file")
+	assert.Contains(t, help, "↑/k, ↓/j: Move cursor") // Combined up/down
+	assert.Contains(t, help, "h/←, l/→: Change directory") // Added
+	assert.Contains(t, help, "gg: Go to top")             // Added
+	assert.Contains(t, help, "G: Go to bottom")           // Added
+	assert.Contains(t, help, "Space: Toggle selection")   // Updated text
+	assert.Contains(t, help, "v: Visual mode")            // Added
+	assert.Contains(t, help, "V: Visual line mode")       // Added
+	assert.Contains(t, help, "o: Organize selected files") // Added
+	assert.Contains(t, help, "r: Refresh view")           // Added
+	assert.Contains(t, help, ":: Command mode")           // Added
 	assert.Contains(t, help, "?: Toggle help")
-	assert.Contains(t, help, "q: Quit")
+	assert.Contains(t, help, "q, quit: Exit") // Updated text
+
+	// Verify removed/changed keys are NOT present
+	assert.NotContains(t, help, "enter: Open directory")
+	assert.NotContains(t, help, "space: Select file") // Check old text isn't present
+	assert.NotContains(t, help, "j/↓: Move down")     // Check old text isn't present
+	assert.NotContains(t, help, "k/↑: Move up")       // Check old text isn't present
+	assert.NotContains(t, help, "q: Quit")             // Check old text isn't present
 }
 
 func TestRenderKeyCommands(t *testing.T) {

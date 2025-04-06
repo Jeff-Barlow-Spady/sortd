@@ -477,9 +477,9 @@ var SetupCmd = &cobra.Command{
 				// Configure watch interval
 				intervalInput := RunGumInput("Check interval in seconds", "300")
 				if interval, err := strconv.Atoi(intervalInput); err == nil && interval > 0 {
-					cfg.WatchMode.Interval = interval
+					// cfg.WatchMode.Interval = interval // REMOVED
 				} else {
-					cfg.WatchMode.Interval = 300 // Default to 5 minutes
+					// cfg.WatchMode.Interval = 300 // Default to 5 minutes // REMOVED
 				}
 
 				// Add watch directories

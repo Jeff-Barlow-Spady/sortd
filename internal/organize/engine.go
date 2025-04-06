@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"sortd/internal/config"
@@ -93,40 +92,19 @@ func (e *Engine) SetDryRun(dryRun bool) {
 // AddPattern adds a new organization pattern
 func (e *Engine) AddPattern(pattern types.Pattern) {
 	e.patterns = append(e.patterns, pattern)
-	log.Debug("Added pattern: glob=%s, dest=%s", pattern.Glob, pattern.DestDir)
+	log.Debug("Added pattern: match=%s, target=%s", pattern.Match, pattern.Target)
 }
 
 // findDestination determines where a file should go based on patterns
 func (e *Engine) findDestination(filename string) (string, bool) {
 	for _, pattern := range e.patterns {
 		// Check glob pattern
-		matched, err := filepath.Match(pattern.Glob, filepath.Base(filename))
+		matched, err := filepath.Match(pattern.Match, filepath.Base(filename))
 		if err != nil || !matched {
 			continue
 		}
 
-		// Check prefixes
-		name := strings.ToLower(filepath.Base(filename))
-		for _, prefix := range pattern.Prefixes {
-			if strings.HasPrefix(name, strings.ToLower(prefix)) {
-				log.Debug("File %s matched prefix %s", filename, prefix)
-				return pattern.DestDir, true
-			}
-		}
-
-		// Check suffixes
-		for _, suffix := range pattern.Suffixes {
-			if strings.HasSuffix(strings.TrimSuffix(name, filepath.Ext(name)), strings.ToLower(suffix)) {
-				log.Debug("File %s matched suffix %s", filename, suffix)
-				return pattern.DestDir, true
-			}
-		}
-
-		// If no prefixes/suffixes defined, glob match is enough
-		if len(pattern.Prefixes) == 0 && len(pattern.Suffixes) == 0 {
-			log.Debug("File %s matched glob %s", filename, pattern.Glob)
-			return pattern.DestDir, true
-		}
+		return pattern.Target, true
 	}
 	return "", false
 }

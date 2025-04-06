@@ -105,10 +105,6 @@ func NewSetupCmd() *cobra.Command {
 			// Ask about watch mode
 			newConfig.WatchMode.Enabled = runGumConfirm("Enable watch mode for automatic organizing?")
 			if newConfig.WatchMode.Enabled {
-				// Show formatted input for interval
-				interval := runGumInput("Check interval in seconds", "300")
-				newConfig.WatchMode.Interval = parseInterval(interval)
-
 				// Add a directory to watch
 				fmt.Println(infoText("\n📂 Select directories to watch:"))
 

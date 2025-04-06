@@ -13,53 +13,7 @@ import (
 	"sortd/internal/organize"
 )
 
-func TestConfigValidation(t *testing.T) {
-	tests := []struct {
-		name      string
-		config    *config.Config
-		wantError bool
-	}{
-		{
-			name: "valid config",
-			config: &config.Config{
-				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
-				}{
-					Collision: "rename",
-				},
-			},
-			wantError: false,
-		},
-		{
-			name: "invalid collision",
-			config: &config.Config{
-				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
-				}{
-					Collision: "invalid",
-				},
-			},
-			wantError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-			if tt.wantError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
+// TestConfigValidation removed - moved to internal/config/config_test.go
 
 func TestConfigIntegration(t *testing.T) {
 	tmpDir := t.TempDir()

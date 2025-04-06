@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"sortd/internal/config"
-	"strconv"
 	"strings"
 
 	"sortd/internal/organize"
@@ -749,22 +748,6 @@ func (a *App) createWatchModeTab() fyne.CanvasObject {
 	})
 	requireConfirmCheck.SetChecked(false)
 
-	intervalLabel := widget.NewLabel("Check Interval (seconds):")
-	intervalEntry := widget.NewEntry()
-	intervalEntry.SetText(fmt.Sprintf("%d", a.cfg.WatchMode.Interval))
-	intervalEntry.OnChanged = func(text string) {
-		if val, err := strconv.Atoi(text); err == nil && val > 0 {
-			a.cfg.WatchMode.Interval = val
-		}
-	}
-
-	confirmPeriodLabel := widget.NewLabel("Confirmation Period (seconds, 0 to disable):")
-	confirmPeriodEntry := widget.NewEntry()
-	confirmPeriodEntry.SetText("0")
-	confirmPeriodEntry.OnChanged = func(text string) {
-		// Ignore - not in our config structure
-	}
-
 	// Watch directories
 	watchDirsList := widget.NewList(
 		func() int { return len(a.cfg.Directories.Watch) },
@@ -829,8 +812,6 @@ func (a *App) createWatchModeTab() fyne.CanvasObject {
 		widget.NewCard("Watch Mode Settings", "", container.NewVBox(
 			enabledCheck,
 			requireConfirmCheck,
-			container.NewHBox(intervalLabel, intervalEntry),
-			container.NewHBox(confirmPeriodLabel, confirmPeriodEntry),
 		)),
 		widget.NewCard("Watch Directories", "", container.NewVBox(
 			watchDirsList,
@@ -914,7 +895,7 @@ func (a *App) startWatchMode() {
 	// Start watch mode
 	err := a.cmdRunner.StartWatchMode(
 		a.cfg.Directories.Watch,
-		a.cfg.WatchMode.Interval,
+		0, // Removed cfg.WatchMode.Interval
 		false, // requireConfirmation - not in our config
 		0,     // confirmationPeriod - not in our config
 	)

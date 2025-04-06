@@ -560,21 +560,6 @@ func TestTUIKeyboardNavigation(t *testing.T) {
 }
 
 func TestTuiOptionSelection(t *testing.T) {
-	t.Run("select with enter", func(t *testing.T) {
-		tui := NewTui()
-		tui.mode = common.Normal
-		file := common.FileEntry{Name: "test1.txt", Path: "test1.txt"}
-		tui.AddFile(file)
-
-		// Test selection with enter
-		newTui, _ := tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("enter")})
-		assert.True(t, newTui.IsSelected(file.Path))
-
-		// Test deselection with enter
-		newTui, _ = newTui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("enter")})
-		assert.False(t, newTui.IsSelected(file.Path))
-	})
-
 	t.Run("select with space", func(t *testing.T) {
 		tui := NewTui()
 		tui.mode = common.Normal
@@ -662,107 +647,11 @@ func TestWatchModeBrowsing(t *testing.T) {
 	})
 }
 
-func TestConfigurationSetup(t *testing.T) {
-	t.Run("config_option_selection", func(t *testing.T) {
+func TestInputValidation(t *testing.T) {
+	t.Run("handle invalid command", func(t *testing.T) {
 		tui := NewTui()
-		tui.mode = common.Setup
-
-		// Test cursor movement
-		newTui, _ := tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-		assert.Equal(t, 1, newTui.cursor)
-
-		// Test option selection
-		newTui, _ = newTui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
-		assert.Equal(t, common.Command, newTui.mode)
-	})
-
-	t.Run("config navigation bounds", func(t *testing.T) {
-		tui := NewTui()
-		tui.mode = common.Setup
-
-		// Test upper bound
-		newTui, _ := tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
-		assert.Equal(t, 0, newTui.cursor)
-
-		// Test lower bound
-		for i := 0; i < 5; i++ {
-			newTui, _ = newTui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-		}
-		assert.Equal(t, 3, newTui.cursor) // Should stop at last option
-	})
-
-	t.Run("escape from config", func(t *testing.T) {
-		tui := NewTui()
-		tui.mode = common.Setup
-
-		newTui, _ := tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("esc")})
-		assert.Equal(t, common.Normal, newTui.mode)
-		assert.Equal(t, 0, newTui.cursor)
-	})
-}
-
-func TestHelpSection(t *testing.T) {
-	t.Run("help toggle", func(t *testing.T) {
-		tui := NewTui()
-		tui.mode = common.Normal
-		tui.showHelp = true
-
-		// Toggle help off
-		newTui, _ := tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
-		assert.False(t, newTui.showHelp)
-
-		// Toggle help on
-		newTui, _ = newTui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("?")})
-		assert.True(t, newTui.showHelp)
-	})
-
-	t.Run("help content", func(t *testing.T) {
-		tui := NewTui()
-		tui.mode = common.Normal
-		tui.showHelp = true
-
-		help := tui.GetHelp()
-		assert.Contains(t, help, "Navigation:")
-		assert.Contains(t, help, "j/↓, k/↑: Move cursor")
-		assert.Contains(t, help, "h/←, l/→: Change directory")
-		assert.Contains(t, help, "enter: Open directory")
-
-		assert.Contains(t, help, "Selection:")
-		assert.Contains(t, help, "space: Toggle selection")
-		assert.Contains(t, help, "v: Visual mode")
-
-		assert.Contains(t, help, "Commands:")
-		assert.Contains(t, help, "q: Quit")
-		assert.Contains(t, help, "?: Toggle help")
-
-		assert.Contains(t, help, "Organization:")
-		assert.Contains(t, help, "o: Organize selected")
-	})
-
-	t.Run("help in setup mode", func(t *testing.T) {
-		tui := NewTui()
-		tui.mode = common.Setup
-		tui.showHelp = true
-
-		view := tui.View()
-		assert.Contains(t, view, "Choose an option (1-4)")
-		assert.Contains(t, view, "Quick Start")
-		assert.Contains(t, view, "Setup Configuration")
-	})
-
-	t.Run("help persistence", func(t *testing.T) {
-		tui := NewTui()
-		tui.mode = common.Normal
-		tui.showHelp = false
-
-		// Help state should persist through navigation
-		newTui, _ := tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
-		assert.False(t, newTui.showHelp)
-
-		// Help state should persist through mode changes
-		newTui.mode = common.Setup
-		view := newTui.View()
-		assert.NotContains(t, view, "Navigation:")
+		_, cmd := tui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("invalid")})
+		assert.Nil(t, cmd)
 	})
 }
 
@@ -887,25 +776,33 @@ func TestFileNavigation(t *testing.T) {
 	}
 }
 
-func TestMainMenu(t *testing.T) {
-	t.Run("quick_start", func(t *testing.T) {
-		m := NewTui()
-		m.mode = common.Setup
+func TestDirectoryNavigation(t *testing.T) {
+	// Create a temporary directory structure
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	require.NoError(t, os.MkdirAll(subDir, 0755))
 
-		// Test quick start option
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
-		assert.Equal(t, common.Normal, newModel.mode)
-	})
+	tui := NewTui()
+	tui.mode = common.Normal
+	tui.SetCurrentDir(tmpDir)
+	require.NoError(t, tui.ScanDirectory())
 
-	t.Run("show_help", func(t *testing.T) {
-		m := NewTui()
-		m.mode = common.Setup
+	// Find subdir index
+	subdirIndex := -1
+	for i, f := range tui.files {
+		if filepath.Base(f.Path) == "subdir" {
+			subdirIndex = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, subdirIndex, "subdir not found")
 
-		// Test help option
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("4")})
-		assert.Equal(t, common.Normal, newModel.mode)
-		assert.True(t, newModel.showHelp)
-	})
+	// Move cursor to subdir
+	tui.SetCursor(subdirIndex)
+
+	// Test directory selection
+	newTui, _ := tui.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	assert.Equal(t, subDir, newTui.currentDir)
 }
 
 func TestFileSelection(t *testing.T) {

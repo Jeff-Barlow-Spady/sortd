@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sortd/pkg/types"
 
@@ -31,9 +32,11 @@ type Config struct {
 		Target  string `yaml:"target"`  // Target directory
 	} `yaml:"rules"`
 	WatchMode struct {
-		Enabled  bool `yaml:"enabled"`  // Enable watch mode
-		Interval int  `yaml:"interval"` // Watch interval in seconds
+		Enabled bool `yaml:"enabled"` // Enable watch mode using fsnotify for event detection.
+		// Note: User notification logic (e.g., debouncing, specific triggers)
+		// is handled separately by the watch daemon/GUI, not via a config interval.
 	} `yaml:"watch_mode"`
+	WatchDirectories []string `yaml:"watch_directories"` // List of directories to monitor
 }
 
 // LoadConfig loads configuration from the default location
@@ -90,10 +93,11 @@ func LoadConfigFile(path string) (*Config, error) {
 		cfg.Rules = tempCfg.Rules
 	}
 
-	cfg.WatchMode.Enabled = tempCfg.WatchMode.Enabled
-	if tempCfg.WatchMode.Interval > 0 {
-		cfg.WatchMode.Interval = tempCfg.WatchMode.Interval
+	if len(tempCfg.WatchDirectories) > 0 {
+		cfg.WatchDirectories = tempCfg.WatchDirectories
 	}
+
+	cfg.WatchMode.Enabled = tempCfg.WatchMode.Enabled
 
 	// Validate the final configuration
 	if err := cfg.Validate(); err != nil {
@@ -126,9 +130,11 @@ func defaultConfig() *Config {
 		Target  string `yaml:"target"`
 	}{}
 
+	// Initialize empty watch directories slice
+	cfg.WatchDirectories = []string{}
+
 	// Set default watch mode settings
 	cfg.WatchMode.Enabled = false
-	cfg.WatchMode.Interval = 5 // 5 seconds default interval
 
 	return cfg
 }
@@ -167,23 +173,18 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate collision setting
-	validCollisions := map[string]bool{"rename": true, "skip": true, "ask": true}
+	validCollisions := map[string]bool{"rename": true, "skip": true, "ask": true, "overwrite": true}
 	if !validCollisions[c.Settings.Collision] {
 		return fmt.Errorf("invalid collision setting: %s", c.Settings.Collision)
 	}
 
-	// Validate watch interval if watch mode is enabled
-	if c.WatchMode.Enabled && c.WatchMode.Interval < 1 {
-		return fmt.Errorf("watch interval must be >= 1 second")
-	}
-
 	// Validate patterns
 	for i, pattern := range c.Organize.Patterns {
-		if pattern.Match == "" {
-			return fmt.Errorf("pattern %d: match pattern is required", i)
+		if strings.TrimSpace(pattern.Match) == "" {
+			return fmt.Errorf("pattern %d: match pattern cannot be empty", i)
 		}
-		if pattern.Target == "" {
-			return fmt.Errorf("pattern %d: target directory is required", i)
+		if strings.TrimSpace(pattern.Target) == "" {
+			return fmt.Errorf("pattern %d: target directory cannot be empty", i)
 		}
 	}
 
@@ -210,6 +211,13 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate watch directories
+	for i, dir := range c.WatchDirectories {
+		if strings.TrimSpace(dir) == "" {
+			return fmt.Errorf("watch directory %d: path cannot be empty", i)
+		}
+	}
+
 	return nil
 }
 
@@ -224,7 +232,6 @@ func NewTestConfig() *Config {
 	cfg.Settings.CreateDirs = true
 	cfg.Settings.Backup = true
 	cfg.Settings.Collision = "rename"
-	cfg.WatchMode.Interval = 5
 	return cfg
 }
 

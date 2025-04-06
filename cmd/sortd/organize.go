@@ -30,7 +30,7 @@ func filterFilesByCategory(files []string, category string) []string {
 // selectFilesInteractive shows an interactive file selection UI
 func selectFilesInteractive(files []string) []string {
 	// Show UI for selecting files
-	fmt.Println("📋 Select files to organize (space to select, enter to confirm):")
+	fmt.Println(" Select files to organize (space to select, enter to confirm):")
 
 	// Calculate relative paths to make them more readable
 	var displayFiles []string
@@ -107,10 +107,10 @@ func NewOrganizeCmd() *cobra.Command {
 					targetPath, _ = os.Getwd()
 				} else {
 					// Use Gum to let the user choose a directory
-					fmt.Println("📂 Choose a directory to organize:")
+					fmt.Println(" Choose a directory to organize:")
 					targetPath = runGumFile("--directory")
 					if targetPath == "" {
-						fmt.Println("❌ No directory selected")
+						fmt.Println(" No directory selected")
 						return
 					}
 				}
@@ -125,9 +125,9 @@ func NewOrganizeCmd() *cobra.Command {
 			info, err := os.Stat(targetPath)
 			if err != nil {
 				if os.IsNotExist(err) {
-					fmt.Printf("❌ Error: path does not exist: %s\n", targetPath)
+					fmt.Printf(" Error: path does not exist: %s\n", targetPath)
 				} else {
-					fmt.Printf("❌ Error: %v\n", err)
+					fmt.Printf(" Error: %v\n", err)
 				}
 				os.Exit(1) // Ensure we exit with an error code
 				return
@@ -146,35 +146,29 @@ func NewOrganizeCmd() *cobra.Command {
 			if !info.IsDir() {
 				// Just organize the single file
 				if verbose {
-					fmt.Printf("ℹ️ Processing single file: %s\n", targetPath)
+					fmt.Printf(" Processing single file: %s\n", targetPath)
 
 					// Ensure absolute path for better clarity
 					absPath, err := filepath.Abs(targetPath)
 					if err == nil {
-						fmt.Printf("ℹ️ Absolute path: %s\n", absPath)
+						fmt.Printf(" Absolute path: %s\n", absPath)
 						targetPath = absPath
 					}
 
 					// Print file info
 					if cfg != nil {
-						fmt.Printf("ℹ️ Collision strategy: %s\n", cfg.Settings.Collision)
+						fmt.Printf(" Collision strategy: %s\n", cfg.Settings.Collision)
 						for i, pattern := range cfg.Organize.Patterns {
-							if pattern.Glob != "" {
-								fmt.Printf("ℹ️ Pattern %d glob: %s\n", i+1, pattern.Glob)
-							}
 							if pattern.Match != "" {
-								fmt.Printf("ℹ️ Pattern %d match: %s\n", i+1, pattern.Match)
+								fmt.Printf(" Pattern %d match: %s\n", i+1, pattern.Match)
 							}
 							if pattern.Target != "" {
-								fmt.Printf("ℹ️ Pattern %d target: %s\n", i+1, pattern.Target)
-							}
-							if pattern.DestDir != "" {
-								fmt.Printf("ℹ️ Pattern %d destDir: %s\n", i+1, pattern.DestDir)
+								fmt.Printf(" Pattern %d target: %s\n", i+1, pattern.Target)
 							}
 						}
 					}
 				} else {
-					fmt.Printf("ℹ️ Note: %s is a file, not a directory\n", targetPath)
+					fmt.Printf(" Note: %s is a file, not a directory\n", targetPath)
 				}
 
 				// Handle a single file directly instead of using OrganizeByPatterns
@@ -185,12 +179,7 @@ func NewOrganizeCmd() *cobra.Command {
 
 					for _, pattern := range cfg.Organize.Patterns {
 						// Check if the pattern applies to this file
-						globPattern := pattern.Glob
-						if globPattern == "" {
-							globPattern = pattern.Match
-						}
-
-						isMatch, err := filepath.Match(globPattern, filepath.Base(targetPath))
+						isMatch, err := filepath.Match(pattern.Match, filepath.Base(targetPath))
 						if err != nil || !isMatch {
 							continue
 						}
@@ -202,10 +191,7 @@ func NewOrganizeCmd() *cobra.Command {
 
 					if matched {
 						// Use Target as a fallback if DestDir is empty
-						destDir := matchedPattern.DestDir
-						if destDir == "" {
-							destDir = matchedPattern.Target
-						}
+						destDir := matchedPattern.Target
 
 						// Build destination path
 						var fullDestDir string
@@ -219,7 +205,7 @@ func NewOrganizeCmd() *cobra.Command {
 
 						// Check if destination exists - handle collision according to strategy
 						if _, err := os.Stat(destPath); err == nil && cfg.Settings.Collision == "fail" {
-							errMsg := fmt.Sprintf("❌ Error: Destination already exists: %s", destPath)
+							errMsg := fmt.Sprintf(" Error: Destination already exists: %s", destPath)
 							fmt.Println(errMsg)
 							fmt.Fprintf(os.Stderr, "%s\n", errMsg) // Print to stderr for test capture
 							os.Exit(1)
@@ -229,7 +215,7 @@ func NewOrganizeCmd() *cobra.Command {
 						// Create destination directory if needed
 						if cfg.Settings.CreateDirs && !dryRun {
 							if err := os.MkdirAll(fullDestDir, 0755); err != nil {
-								fmt.Printf("❌ Error creating directory: %v\n", err)
+								fmt.Printf(" Error creating directory: %v\n", err)
 								os.Exit(1)
 								return
 							}
@@ -237,48 +223,48 @@ func NewOrganizeCmd() *cobra.Command {
 
 						// Handle dry run mode
 						if dryRun {
-							fmt.Printf("🔍 Would move %s -> %s\n", targetPath, destPath)
+							fmt.Printf(" Would move %s -> %s\n", targetPath, destPath)
 							return
 						}
 
 						// Move the file directly
-						fmt.Printf("🔄 Moving %s -> %s\n", targetPath, destPath)
+						fmt.Printf(" Moving %s -> %s\n", targetPath, destPath)
 						err := organizeEngine.MoveFile(targetPath, destPath)
 						if err != nil {
-							errMsg := fmt.Sprintf("❌ Error: %v", err)
+							errMsg := fmt.Sprintf(" Error: %v", err)
 							if strings.Contains(err.Error(), "already exists") {
-								errMsg = fmt.Sprintf("❌ Error: Destination already exists: %v", err)
+								errMsg = fmt.Sprintf(" Error: Destination already exists: %v", err)
 							}
 							fmt.Println(errMsg)
 							os.Exit(1)
 							return
 						}
 
-						fmt.Println("✅ File organized successfully!")
+						fmt.Println(" File organized successfully!")
 						return
 					} else {
-						fmt.Println("⚠️ No pattern matched this file")
+						fmt.Println(" No pattern matched this file")
 						return
 					}
 				} else {
 					// No patterns available, can't organize
-					fmt.Println("❌ Error: No organization patterns available")
+					fmt.Println(" Error: No organization patterns available")
 					os.Exit(1)
 					return
 				}
 			} else {
 				// Scan for files in the directory
-				fmt.Printf("🔍 Scanning %s for files...\n", targetPath)
+				fmt.Printf(" Scanning %s for files...\n", targetPath)
 				var err error
 				files, err := findFiles(targetPath)
 				if err != nil {
-					fmt.Printf("❌ Error scanning directory: %v\n", err)
+					fmt.Printf(" Error scanning directory: %v\n", err)
 					os.Exit(1) // Exit with error code
 					return
 				}
 
 				// Analyze files
-				fmt.Println("🧠 Analyzing files...")
+				fmt.Println(" Analyzing files...")
 
 				// If we're in test mode, just organize everything
 				if os.Getenv("TESTMODE") == "true" {
@@ -296,7 +282,7 @@ func NewOrganizeCmd() *cobra.Command {
 
 						// If there are too many files, first show a category filter
 						if len(files) > 20 {
-							fmt.Println("🔍 That's a lot of files! Let's filter by type first:")
+							fmt.Println(" That's a lot of files! Let's filter by type first:")
 							categories := analyzeFileTypes(files)
 
 							// Use runGumChoose with the categories
@@ -312,15 +298,15 @@ func NewOrganizeCmd() *cobra.Command {
 							if len(selected) > 0 {
 								filesToOrganize = selected
 							} else {
-								fmt.Println("ℹ️ No files selected for organization")
+								fmt.Println(" No files selected for organization")
 								return
 							}
 						} else {
-							fmt.Println("ℹ️ No files found to organize")
+							fmt.Println(" No files found to organize")
 							return
 						}
 					} else {
-						fmt.Println("ℹ️ No files found to organize")
+						fmt.Println(" No files found to organize")
 						return
 					}
 				}
@@ -328,13 +314,13 @@ func NewOrganizeCmd() *cobra.Command {
 
 			// Handle dry run mode
 			if dryRun {
-				fmt.Println("🔍 Dry run mode: files would be organized as follows:")
+				fmt.Println(" Dry run mode: files would be organized as follows:")
 				printOrganizePlan(organizeEngine, filesToOrganize)
 				return
 			}
 
 			// Execute organization
-			fmt.Println("🔄 Organizing files...")
+			fmt.Println(" Organizing files...")
 
 			// Special handling for single files in test mode
 			if os.Getenv("TESTMODE") == "true" && len(filesToOrganize) == 1 {
@@ -342,19 +328,19 @@ func NewOrganizeCmd() *cobra.Command {
 
 				// Print debug info
 				if verbose {
-					fmt.Printf("🔍 Test mode organizing single file: %s\n", singleFile)
+					fmt.Printf(" Test mode organizing single file: %s\n", singleFile)
 				}
 
 				// Check for potential collision for each pattern
 				matched := false
 				for _, pattern := range cfg.Organize.Patterns {
-					globPattern := pattern.Glob
-					if globPattern == "" {
-						globPattern = pattern.Match
+					match := pattern.Match
+					if match == "" {
+						match = pattern.Match
 					}
 
 					// Check if pattern matches
-					isMatch, _ := filepath.Match(globPattern, filepath.Base(singleFile))
+					isMatch, _ := filepath.Match(match, filepath.Base(singleFile))
 					if !isMatch {
 						continue
 					}
@@ -362,10 +348,7 @@ func NewOrganizeCmd() *cobra.Command {
 					matched = true
 
 					// Find destination path
-					destDir := pattern.DestDir
-					if destDir == "" {
-						destDir = pattern.Target
-					}
+					destDir := pattern.Target
 
 					// Get full path
 					var fullDestDir string
@@ -378,14 +361,14 @@ func NewOrganizeCmd() *cobra.Command {
 					destPath := filepath.Join(fullDestDir, filepath.Base(singleFile))
 
 					if verbose {
-						fmt.Printf("🔍 Checking destination: %s\n", destPath)
+						fmt.Printf(" Checking destination: %s\n", destPath)
 					}
 
 					// Check for collision
 					_, statErr := os.Stat(destPath)
 					if statErr == nil && cfg.Settings.Collision == "fail" {
 						// File exists - collision!
-						errMsg := fmt.Sprintf("❌ Error: Destination already exists: %s", destPath)
+						errMsg := fmt.Sprintf(" Error: Destination already exists: %s", destPath)
 						fmt.Println(errMsg)
 						fmt.Fprintf(os.Stderr, "%s\n", errMsg) // Print to stderr for test capture
 						os.Exit(1)
@@ -394,7 +377,7 @@ func NewOrganizeCmd() *cobra.Command {
 				}
 
 				if !matched && verbose {
-					fmt.Println("⚠️ No pattern matched this file in test mode")
+					fmt.Println(" No pattern matched this file in test mode")
 				}
 			}
 
@@ -406,26 +389,23 @@ func NewOrganizeCmd() *cobra.Command {
 					singleFile := filesToOrganize[0]
 
 					if verbose {
-						fmt.Printf("🔍 Got 'not a directory' error for file: %s\n", singleFile)
+						fmt.Printf(" Got 'not a directory' error for file: %s\n", singleFile)
 					}
 
 					for _, pattern := range cfg.Organize.Patterns {
-						globPattern := pattern.Glob
-						if globPattern == "" {
-							globPattern = pattern.Match
+						match := pattern.Match
+						if match == "" {
+							match = pattern.Match
 						}
 
 						// Check if pattern matches
-						isMatch, _ := filepath.Match(globPattern, filepath.Base(singleFile))
+						isMatch, _ := filepath.Match(match, filepath.Base(singleFile))
 						if !isMatch {
 							continue
 						}
 
 						// Find destination path
-						destDir := pattern.DestDir
-						if destDir == "" {
-							destDir = pattern.Target
-						}
+						destDir := pattern.Target
 
 						// Get full path
 						var fullDestDir string
@@ -438,14 +418,14 @@ func NewOrganizeCmd() *cobra.Command {
 						destPath := filepath.Join(fullDestDir, filepath.Base(singleFile))
 
 						if verbose {
-							fmt.Printf("🔍 Checking destination after error: %s\n", destPath)
+							fmt.Printf(" Checking destination after error: %s\n", destPath)
 						}
 
 						// Check for collision
 						_, statErr := os.Stat(destPath)
 						if statErr == nil {
 							// File exists - collision!
-							errMsg := fmt.Sprintf("❌ Error: Destination already exists: %s", destPath)
+							errMsg := fmt.Sprintf(" Error: Destination already exists: %s", destPath)
 							fmt.Println(errMsg)
 							fmt.Fprintf(os.Stderr, "%s\n", errMsg) // Print to stderr for test capture
 							os.Exit(1)
@@ -454,22 +434,22 @@ func NewOrganizeCmd() *cobra.Command {
 					}
 
 					// If we get here and found no collision, return the original error
-					fmt.Printf("❌ Error: %v\n", err)
+					fmt.Printf(" Error: %v\n", err)
 					os.Exit(1)
 					return
 				}
 
 				// Ensure "already exists" errors are clearly visible
-				errMsg := fmt.Sprintf("❌ Error: %v", err)
+				errMsg := fmt.Sprintf(" Error: %v", err)
 				if strings.Contains(err.Error(), "already exists") {
-					errMsg = fmt.Sprintf("❌ Error: Destination already exists: %v", err)
+					errMsg = fmt.Sprintf(" Error: Destination already exists: %v", err)
 				}
 				fmt.Println(errMsg)
 				os.Exit(1) // Exit with error code
 				return
 			}
 
-			fmt.Println("✅ Files organized successfully!")
+			fmt.Println(" Files organized successfully!")
 		},
 	}
 

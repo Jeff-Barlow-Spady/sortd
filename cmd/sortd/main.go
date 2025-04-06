@@ -308,7 +308,8 @@ func tuiCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			// Create and run the TUI with the version
 			m := tui.New(version)
-			p := tea.NewProgram(m, tea.WithAltScreen())
+			// Initialize Bubble Tea program WITHOUT alt screen for potentially better compatibility in non-TTY environments
+			p := tea.NewProgram(m)
 			if _, err := p.Run(); err != nil {
 				fmt.Printf("Error running TUI: %v\n", err)
 				os.Exit(1)

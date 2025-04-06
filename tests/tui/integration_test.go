@@ -174,13 +174,6 @@ func TestTUIIntegration(t *testing.T) {
 	m.SetCurrentDir(tmpDir)
 	require.NoError(t, m.ScanDirectory())
 
-	// Debug: Print found files
-	t.Logf("Current directory: %s", m.CurrentDir())
-	t.Logf("Found files:")
-	for i, file := range m.Files() {
-		t.Logf("  %d: %s", i, file.Name)
-	}
-
 	// Test sequence of operations
 	t.Run("file navigation and selection", func(t *testing.T) {
 		// Initial state
@@ -190,9 +183,13 @@ func TestTUIIntegration(t *testing.T) {
 
 		// Move cursor down and select test1.txt
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = newModel.(*tui.Model) // Cursor at dir2 (index 1)
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = newModel.(*tui.Model) // Cursor at test1.txt (index 2)
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace}) // Send Space key correctly
 		m = newModel.(*tui.Model)
-		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
-		m = newModel.(*tui.Model)
+		time.Sleep(50 * time.Millisecond) // Keep delay just in case
+
 		assert.True(t, m.IsSelected("test1.txt"), "test1.txt should be selected")
 
 		// Find dir1 in the file list
