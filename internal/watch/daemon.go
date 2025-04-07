@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	log "github.com/sirupsen/logrus"
 
 	"sortd/internal/config"
-	"sortd/internal/log"
 	"sortd/internal/organize"
 )
 
@@ -84,13 +84,14 @@ func (d *Daemon) Start() error {
 	if len(d.config.WatchDirectories) > 0 {
 		for _, dir := range d.config.WatchDirectories {
 			if err := d.watcher.Add(dir); err != nil {
-				// Use internal logger for error
-				log.Errorf("Error adding watch directory %s: %w", dir, err)
-				// Decide if we should return the error or just log it
+				// Use the config path for context in the error message?
+				// Format error for logging *without* %w for custom logger (and logrus)
+				log.Errorf("Error adding watch directory %s: %v", dir, err)
 				// For now, return the error to prevent starting with incomplete watches
+				// Use fmt.Errorf with %w here for proper error wrapping in the return value
 				return fmt.Errorf("error adding watch directory %s: %w", dir, err)
 			}
-			log.Info("Watching directory: %s", dir)
+			log.Infof("Watching directory: %s", dir)
 		}
 	} else {
 		log.Info("No watch directories specified in configuration.")
@@ -134,7 +135,7 @@ func (d *Daemon) AddWatchDirectory(dir string) error {
 	if err != nil {
 		log.Errorf("Error adding watch directory dynamically %s: %v", dir, err)
 	} else {
-		log.Info("Dynamically added watch directory: %s", dir)
+		log.Infof("Dynamically added watch directory: %s", dir)
 	}
 	return err
 }
@@ -247,7 +248,7 @@ func (d *Daemon) organizeFile(filePath string) {
 	d.processed++
 	d.mutex.Unlock()
 
-	log.Info("Successfully organized file: %s (or skipped by engine rules)", filePath)
+	log.Infof("Successfully organized file: %s (or skipped by engine rules)", filePath)
 
 	// If a callback is registered, notify it of success (nil error)
 	// We don't know the exact destination path from OrganizeByPatterns easily.
@@ -276,7 +277,7 @@ func (d *Daemon) OrganizeFile(filePath string) (string, error) {
 	d.processed++
 	d.mutex.Unlock()
 
-	log.Info("Successfully manually organized file: %s", filePath)
+	log.Infof("Successfully manually organized file: %s", filePath)
 
 	// We don't know the destination path easily from OrganizeByPatterns.
 	// Return empty string for path and nil for error on success.

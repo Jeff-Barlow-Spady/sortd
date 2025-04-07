@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sortd/internal/analysis"
+	"sortd/internal/config"
 	"sortd/internal/organize"
 	"sortd/internal/tui/styles"
 	"sortd/pkg/types"
@@ -22,6 +23,67 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// Message Types for TUI updates
+type statusMessage string
+
+// View types for the TUI
+type ActiveView int
+
+const (
+	ViewList ActiveView = iota
+	ViewTree
+)
+
+// UI Constants
+const (
+	StatusBarHeight = 1
+	HeaderHeight = 2
+)
+
+type filesLoadedMsg struct {
+	files []types.FileEntry
+	err   error
+}
+// Define a Results type for analysis package
+type Results struct {
+	Files []*types.FileInfo
+	Stats map[string]int
+}
+
+type analysisCompleteMsg struct {
+	results *Results
+	err     error
+}
+type organizationCompleteMsg struct {
+	err error
+}
+type directoryCreatedMsg struct {
+	name string
+	err  error
+}
+type directoryDeletedMsg struct {
+	name string
+	err  error
+}
+type fileDeletedMsg struct {
+	name string
+	err  error
+}
+type fileRenamedMsg struct {
+	oldName string
+	newName string
+	err     error
+}
+type filesSelectedMsg struct {
+	selected map[string]bool
+}
+
+// errorMsg wraps an error for tea.Cmd processing
+type errorMsg struct{ err error }
+
+// Implement the error interface for errorMsg
+func (e errorMsg) Error() string { return e.err.Error() }
 
 // KeyMap defines the keybindings for the application
 type KeyMap struct {
@@ -266,6 +328,9 @@ func createCustomListDelegate() list.DefaultDelegate {
 
 // Model represents the TUI state
 type Model struct {
+	// Status and command fields
+	statusMsg    string
+	commandInput string
 	// Core state
 	keys          KeyMap
 	help          help.Model
@@ -281,8 +346,8 @@ type Model struct {
 
 	// Command mode state
 	commandBuffer string
-	statusMsg     string
-	lastKey       string
+
+	lastKey string
 
 	// Visual mode state
 	visualStart int
@@ -295,6 +360,15 @@ type Model struct {
 
 	// Styles
 	styles lipgloss.Style
+
+	// Additional fields for refactored Update
+	loading         bool
+	organizing      bool
+	config          *config.Config
+	analysisResults *Results
+	width           int
+	height          int
+	activeView      ActiveView
 }
 
 // Ensure Model implements types.ModelReader
@@ -394,546 +468,295 @@ func New(version string) *Model {
 
 // View returns the UI as a string
 func (m *Model) View() string {
-	// If the user is quitting (handled in Update function)
-	if strings.HasPrefix(m.statusMsg, "Quitting") {
-		return "Thanks for using sortd! Goodbye!\n"
+	// Determine active panel for border styling
+	listActive := m.activeView == ViewList
+	treeActive := m.activeView == ViewTree
+
+	// Apply active/inactive styles
+	listStyle := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
+	treeStyle := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
+	if listActive {
+		listStyle = listStyle.BorderStyle(lipgloss.DoubleBorder())
+	}
+	if treeActive {
+		treeStyle = treeStyle.BorderStyle(lipgloss.DoubleBorder())
 	}
 
-	// Simplified view with minimal dependencies on complex components
-	var b strings.Builder
+	// File List View
+	listViewContent := m.list.View()
 
-	// TOP BAR
-	pathText := fmt.Sprintf("Location: %s", m.currentDir)
-	statsText := fmt.Sprintf("Files: %d • Selected: %d", len(m.list.Items()), len(m.selectedFiles))
+	// File Tree View
+	// Assuming FileTree component has a View() method
+	fileTreeViewContent := m.fileTree.View()
 
-	topBar := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(styles.DefaultTheme.ColorBorder).
-		Width(m.viewport.Width - 4).
-		Foreground(styles.DefaultTheme.ColorPrimary).
-		Bold(true).
-		Render(pathText + " | " + statsText)
+	// Use appropriate border style based on active view
+	mainPanelContent := ""
+	if m.activeView == ViewList {
+		// Apply the appropriate border style based on active state
+		listBorderStyle := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
+		if listActive {
+			listBorderStyle = listBorderStyle.BorderStyle(lipgloss.DoubleBorder())
+		}
 
-	b.WriteString(topBar + "\n\n")
-
-	// CONTENT AREA
-	// Left panel with logo and help
-	leftContent := m.renderASCIILogo() + "\n\n"
-	if m.version != "" {
-		leftContent += styles.DefaultTheme.Version.Render(fmt.Sprintf("v%s", m.version)) + "\n\n"
-	}
-
-	leftContent += styles.DefaultTheme.Section.Render("Quick Tips:") + "\n\n"
-
-	// Add some quick help tips
-	tips := []string{
-		"• Space to select files",
-		"• Enter to open directories",
-		"• o to organize selected files",
-		"• / to search files",
-		"• v for visual selection mode",
-		"• q to quit",
-		"• ? for more help",
-	}
-
-	for _, tip := range tips {
-		leftContent += styles.DefaultTheme.Tip.Render(tip) + "\n"
-	}
-
-	leftPanel := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(styles.DefaultTheme.ColorBorder).
-		Width(30).
-		Padding(1).
-		Render(leftContent)
-
-	// Right panel with file list/tree view
-	var rightContent string
-	if m.useFileTree && m.fileTree != nil {
-		rightContent = "File Tree\n\n" + m.fileTree.View()
-	} else if len(m.list.Items()) > 0 {
-		// Only use list.View() if we have items
-		// This avoids the slice bounds panic
-		rightContent = m.list.View()
+		mainPanelContent = listBorderStyle.
+			Width(m.list.Width()).   // Use the list's width
+			Height(m.list.Height()). // Use the list's height
+			Render(listViewContent)
 	} else {
-		// Safe fallback when list is empty
-		rightContent = "No files to display"
+		// Apply the appropriate border style based on active state
+		treeBorderStyle := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
+		if treeActive {
+			treeBorderStyle = treeBorderStyle.BorderStyle(lipgloss.DoubleBorder())
+		}
+
+		// We need to implement GetWidth and GetHeight methods for fileTree
+		// For now, use reasonable defaults
+		treeWidth := m.width / 2
+		treeHeight := m.height - StatusBarHeight - HeaderHeight // accounting for borders
+
+		mainPanelContent = treeBorderStyle.
+			Width(treeWidth).
+			Height(treeHeight).
+			Render(fileTreeViewContent)
 	}
 
-	rightWidth := m.viewport.Width - 40
-	if rightWidth < 40 {
-		rightWidth = 40
+	// Viewport (File Preview) - potentially overlaps or replaces list view based on state
+	// Example: Only show viewport when a file is selected and preview is enabled?
+	// For now, let's render it below the list/tree. Adjust layout as needed.
+	viewportContent := ""
+	if m.viewport.Height > 0 && m.list.SelectedItem() != nil { // Basic condition to show viewport
+		viewportStyle := lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder())
+		viewportContent = viewportStyle.Render(m.viewport.View())
 	}
 
-	rightPanel := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(styles.DefaultTheme.ColorBorder).
-		Width(rightWidth).
-		Padding(1).
-		Render(rightContent)
+	// Left Panel (Header/Logo/Tips)
+	leftPanel := m.headerView() // Assuming headerView provides the styled left panel content
 
-	// Join panels side by side safely
-	mainContent := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, rightPanel)
-	b.WriteString(mainContent + "\n\n")
+	// Combine Left and Right panels horizontally
+	// Adjust widths dynamically based on m.width
+	// Ensure total width doesn't exceed m.width
+	// Width allocation is handled in the Update method
 
-	// BOTTOM BAR
-	statusText := "ℹ️ "
-	if m.statusMsg != "" {
-		statusText += m.statusMsg
-	} else {
-		statusText += "Press ? for help"
-	}
+	// Ensure panels don't overlap and fit within the total width
+	// Recalculate rightPanelWidth if leftPanel width is fixed or different
+	// rightPanelWidth = m.width - lipgloss.Width(leftPanel) - 1 // Alternative calculation
 
-	// Simpler help view to avoid potential rendering issues
-	helpText := "↑/k:Up ↓/j:Down Space:Select Enter:Open o:Organize Tab:Toggle ?:Help q:Quit"
-	if m.showFullHelp {
-		helpText = m.help.View(m.keys)
-	}
+	// Create the main layout using the calculated panel widths
+	mainViewLayout := lipgloss.JoinHorizontal(lipgloss.Top,
+		leftPanel,
+		mainPanelContent, // Contains either list or tree view with border
+	)
 
-	bottomBar := lipgloss.NewStyle().
-		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(styles.DefaultTheme.ColorBorder).
-		Width(m.viewport.Width - 4).
-		Render(statusText + "\n\n" + helpText)
+	// Combine main layout with viewport (if shown) and status bar
+	finalView := lipgloss.JoinVertical(lipgloss.Left,
+		mainViewLayout,
+		viewportContent,     // Add viewport below
+		m.renderStatusBar(), // Status bar/help
+	)
 
-	b.WriteString(bottomBar)
-
-	return b.String()
-}
-
-// Helper method to provide visual feedback for actions
-func (m *Model) setStatusWithFeedback(msg string) {
-	m.statusMsg = msg
+	// Ensure the final view respects terminal dimensions
+	// This might involve truncation or scrolling handled by components
+	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, finalView)
 }
 
 // Update handles all the Bubble Tea messages and updates the model
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		// Save window dimensions
-		height := msg.Height
-		width := msg.Width
+		// Store the dimensions
+		m.width = msg.Width
+		m.height = msg.Height
 
-		// Minimum dimensions to prevent rendering errors
-		if height < 20 {
-			height = 20
-		}
-		if width < 80 {
-			width = 80
-		}
+		// Calculate panel sizes
+		// Example: Use a 1/3, 2/3 split for the two main panels
+		leftPanelWidth := m.width / 3
+		// rightPanelWidth := m.width - leftPanelWidth - 1 // Account for divider/padding
 
-		// Set viewport dimensions
-		m.viewport.Width = width
-		m.viewport.Height = height
+		// Update help
+		m.help.Width = m.width
 
-		// Calculate available dimensions for components
-		availableHeight := height - 10 // Reserve space for header and footer
+		// Update list dimensions (use right panel width)
+		m.list.SetSize(leftPanelWidth, m.height-2-1) // Adjust height for status bar and header
 
-		// Configure list size
-		listWidth := width - 40
-		if listWidth < 40 {
-			listWidth = 40
-		}
+		// Update viewport dimensions (used for preview)
+		// This might depend on which view is active, let's assume it shares space with the list for now
+		m.viewport.Width = leftPanelWidth
+		m.viewport.Height = m.height - 2 - 1
 
-		// CRITICAL FIX: Safe list height
-		listHeight := availableHeight - 5
-		if listHeight < 10 {
-			listHeight = 10
-		}
+		// Update help
+		m.help.Width = m.width
+		// If the viewport needs different dimensions based on context, adjust here
 
-		// Update list dimensions and ensure pagination is safe
-		m.list.SetSize(listWidth, listHeight)
-		m.list.SetHeight(listHeight)
+	case statusMessage:
+		m.statusMsg = string(msg)
+		return m, nil
 
-		// Only show pagination if we have enough items
-		itemsPerPage := listHeight / 2 // Approximate items per page
-		m.list.SetShowPagination(len(m.list.Items()) > itemsPerPage)
-
-		// Set file tree dimensions if it exists
-		if m.fileTree != nil {
-			m.fileTree.Height = listHeight
-			m.fileTree.Width = listWidth
+	case filesLoadedMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Error loading directory: %v", msg.err)
+			m.list.SetItems(nil) // Clear list on error
+			return m, nil
 		}
 
-		// Set help model width
-		m.help.Width = width - 4
+		items := make([]list.Item, len(msg.files))
+		for i, entry := range msg.files {
+			items[i] = Item{entry: entry}
+		}
 
-		// Trigger a screen refresh
-		cmds = append(cmds, tea.ClearScreen)
+		// Sort items (directories first, then by name)
+		sort.SliceStable(items, func(i, j int) bool {
+			itemI := items[i].(Item)
+			itemJ := items[j].(Item)
+			if itemI.entry.IsDir && !itemJ.entry.IsDir {
+				return true
+			}
+			if !itemI.entry.IsDir && itemJ.entry.IsDir {
+				return false
+			}
+			return itemI.entry.Name < itemJ.entry.Name
+		})
 
+		m.list.SetItems(items)
+		m.list.Select(0) // Reset cursor to the top
+		m.statusMsg = fmt.Sprintf("%d items loaded", len(items))
+		// Update viewport content if showing preview
+		m.viewport.SetContent(m.getCurrentPreviewContent())
+		return m, nil // Return nil cmd after loading
+
+	case analysisCompleteMsg:
+		m.loading = false // Should already be false, but just in case
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Error analyzing directory: %v", msg.err)
+			// Clear analysis view?
+			return m, nil
+		}
+		m.analysisResults = msg.results
+		m.statusMsg = fmt.Sprintf("Analysis complete for %s", m.currentDir)
+		// Update viewport content if showing preview and analysis is relevant
+		m.viewport.SetContent(m.getCurrentPreviewContent())
+		return m, nil
+
+	case organizationCompleteMsg:
+		m.loading = false
+		m.organizing = false
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Organization failed: %v", msg.err)
+			// Potentially return an error command or specific error message type
+			return m, m.setStatus(fmt.Sprintf("Error: %v", msg.err)) // Use setStatus for feedback
+		}
+		// Clear selection after successful organization
+		m.selectedFiles = make(map[string]bool)
+		m.visualMode = false
+		m.visualStart = -1
+		// Refresh directory view
+		m.statusMsg = "Organization complete."
+		cmds = append(cmds, m.loadDirectory(m.currentDir)) // Reload directory content
 		return m, tea.Batch(cmds...)
 
-	case tea.KeyMsg:
-		// Handle command mode separately
-		if m.mode == types.Command {
-			return m.handleCommandMode(msg)
+	case directoryCreatedMsg:
+		if msg.err != nil {
+			cmds = append(cmds, m.setStatus(fmt.Sprintf("Error creating dir: %v", msg.err)))
+			return m, tea.Batch(cmds...)
+
 		}
+		cmds = append(cmds, m.setStatus(fmt.Sprintf("Directory '%s' created", msg.name)))
+		cmds = append(cmds, m.loadDirectory(m.currentDir)) // Refresh list
+		return m, tea.Batch(cmds...)
 
-		// First check if quit is pressed (this takes precedence)
-		if key.Matches(msg, m.keys.Quit) {
-			// Show a goodbye message before quitting
-			m.setStatusWithFeedback("Goodbye! 👋")
-			return m, tea.Quit
-		}
-
-		// Handle toggle view key
-		if key.Matches(msg, m.keys.ToggleView) {
-			m.useFileTree = !m.useFileTree
-
-			// Sync directory between views
-			if m.useFileTree {
-				// Switch to file tree view
-				m.fileTree.SetDirectory(m.currentDir)
-				m.setStatusWithFeedback("Switched to file tree view 🔍")
-				return m, nil
-			} else {
-				// Switch to list view
-				m.currentDir = m.fileTree.CurrentDir
-				if err := m.ScanDirectory(); err != nil {
-					m.setStatusWithFeedback(fmt.Sprintf("Error scanning directory: %v", err))
-				} else {
-					m.setStatusWithFeedback("Switched to list view 📋")
-				}
-				return m, nil
-			}
-		}
-
-		// If using file tree, let it handle most inputs
-		if m.useFileTree {
-			// Let the file tree handle the message
-			var cmd tea.Cmd
-			newTree, cmd := m.fileTree.Update(msg)
-			m.fileTree = newTree
-
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+	case directoryDeletedMsg:
+		if msg.err != nil {
+			cmds = append(cmds, m.setStatus(fmt.Sprintf("Error deleting dir: %v", msg.err)))
 			return m, tea.Batch(cmds...)
 		}
-
-		// Handle list navigation
-		var cmd tea.Cmd
-		var itemToSelect Item // Variable to store item BEFORE list update
-		isSelectKey := false    // Flag to indicate if space was pressed
-
-		// Check if the key is 'Select' (space) BEFORE potentially modifying list state
-		if key.Matches(msg, m.keys.Select) {
-			if m.list.SelectedItem() != nil {
-				// Store the item that is *currently* selected
-				itemToSelect = m.list.SelectedItem().(Item)
-				isSelectKey = true
-			} else {
-			}
-		}
-
-		// Check for special key handling in list view that should return early
-		switch {
-		case key.Matches(msg, m.keys.ToggleHelp):
-			m.showFullHelp = !m.showFullHelp
-			if m.showFullHelp {
-				m.setStatusWithFeedback("Help expanded ℹ️")
-			} else {
-				m.setStatusWithFeedback("Help minimized ↩️")
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.CommandMode):
-			m.mode = types.Command
-			m.commandBuffer = ":"
-			m.setStatusWithFeedback("Command mode - type a command and press Enter")
-			return m, nil
-
-		case key.Matches(msg, m.keys.VisualMode):
-			m.visualMode = !m.visualMode
-			if m.visualMode {
-				m.visualStart = m.list.Index()
-				m.visualEnd = m.list.Index()
-				m.updateVisualSelection()
-			} else {
-				// Keep selections when exiting visual mode
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.Left):
-			// Go up one directory
-			parent := filepath.Dir(m.currentDir)
-			if parent != m.currentDir {
-				m.currentDir = parent
-				dirName := filepath.Base(parent)
-				m.setStatusWithFeedback(fmt.Sprintf("Changed to parent directory: %s", dirName))
-				if err := m.ScanDirectory(); err != nil {
-					m.setStatusWithFeedback(fmt.Sprintf("Error scanning directory: %v", err))
-				}
-			} else {
-				m.setStatusWithFeedback("Already at the root directory")
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.Right):
-			// Handle directory navigation
-			if len(m.list.Items()) > 0 {
-				selectedIndex := m.list.Index()
-				if selectedIndex < 0 || selectedIndex >= len(m.list.Items()) {
-					return m, nil // Invalid index
-				}
-
-				selectedItem := m.list.Items()[selectedIndex].(Item)
-				file := selectedItem.entry
-
-				// Check if it's a directory
-				isDir := false
-				if file.ContentType == "directory" || strings.Contains(file.ContentType, "directory") {
-					isDir = true
-				} else {
-					// Try to check with os.Stat as a fallback
-					fullPath := filepath.Join(m.currentDir, file.Name)
-					if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
-						isDir = true
-					}
-				}
-
-				if isDir {
-					// Navigate into the directory
-					newDir := filepath.Join(m.currentDir, file.Name)
-					m.currentDir = newDir
-					m.setStatusWithFeedback(fmt.Sprintf("Entered directory: %s", file.Name))
-					if err := m.ScanDirectory(); err != nil {
-						m.setStatusWithFeedback(fmt.Sprintf("Error scanning directory: %v", err))
-					}
-					return m, nil
-				} else {
-					m.setStatusWithFeedback(fmt.Sprintf("Can't navigate: %s is not a directory", file.Name))
-				}
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.Select):
-			// Toggle selection for the current file
-			if len(m.list.Items()) > 0 {
-				selectedIndex := m.list.Index()
-				if selectedIndex < 0 || selectedIndex >= len(m.list.Items()) {
-					return m, nil // Invalid index
-				}
-
-				selectedItem := m.list.Items()[selectedIndex].(Item)
-				file := selectedItem.entry
-				fullPath := filepath.Join(m.currentDir, file.Name)
-
-				// Toggle selection
-				if m.selectedFiles[fullPath] {
-					delete(m.selectedFiles, fullPath)
-					m.setStatusWithFeedback(fmt.Sprintf("Deselected: %s", file.Name))
-				} else {
-					m.selectedFiles[fullPath] = true
-					m.setStatusWithFeedback(fmt.Sprintf("Selected: %s", file.Name))
-				}
-
-				// Update the selection in the list model
-				m.updateItemSelection(selectedIndex, m.selectedFiles[fullPath])
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.Up) || key.Matches(msg, m.keys.Down):
-			// First update the list
-			var newCmd tea.Cmd
-			m.list, newCmd = m.list.Update(msg)
-			cmd = newCmd
-
-			// If in visual mode, update the visual selection
-			if m.visualMode {
-				m.visualEnd = m.list.Index()
-				m.updateVisualSelection()
-
-				// Show count of selected items
-				startIdx := min(m.visualStart, m.visualEnd)
-				endIdx := max(m.visualStart, m.visualEnd)
-				count := endIdx - startIdx + 1
-				m.setStatusWithFeedback(fmt.Sprintf("Selected %d files in visual mode", count))
-			} else if len(m.list.Items()) > 0 {
-				// Show the current item even in normal mode
-				selectedIndex := m.list.Index()
-				if selectedIndex >= 0 && selectedIndex < len(m.list.Items()) {
-					selectedItem := m.list.Items()[selectedIndex].(Item)
-					file := selectedItem.entry
-
-					// Different status depending on file type and selection state
-					fullPath := filepath.Join(m.currentDir, file.Name)
-					isSelected := m.selectedFiles[fullPath]
-
-					if isSelected {
-						m.setStatusWithFeedback(fmt.Sprintf("File: %s (selected) ✓", file.Name))
-					} else {
-						if strings.Contains(strings.ToLower(file.ContentType), "directory") {
-							m.setStatusWithFeedback(fmt.Sprintf("Directory: %s (→ to enter)", file.Name))
-						} else {
-							m.setStatusWithFeedback(fmt.Sprintf("File: %s (%s)", file.Name, formatSize(file.Size)))
-						}
-					}
-				}
-			}
-
-			return m, cmd
-
-		case key.Matches(msg, m.keys.Organize):
-			// Organize the selected files
-			selectedCount := len(m.selectedFiles)
-			if selectedCount == 0 {
-				m.setStatusWithFeedback("No files selected for organizing")
-				return m, nil
-			}
-
-			m.setStatusWithFeedback(fmt.Sprintf("Organizing %d files... 🔄", selectedCount))
-
-			// In a real implementation, we would do the organizing here
-			// For now, just provide visual feedback
-
-			// Here you'd call your organize function
-			// For example: results := m.organizeEngine.OrganizeFiles(...)
-
-			// Then provide feedback on the results
-			m.setStatusWithFeedback(fmt.Sprintf("Organized %d files successfully! ✅", selectedCount))
-
-			return m, nil
-
-		case key.Matches(msg, m.keys.Refresh):
-			// Refresh the current directory
-			if err := m.ScanDirectory(); err != nil {
-				m.setStatusWithFeedback(fmt.Sprintf("Error refreshing directory: %v", err))
-			} else {
-				m.setStatusWithFeedback("Directory refreshed 🔄")
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.GoToTop):
-			// Go to the first item in the list
-			if len(m.list.Items()) > 0 {
-				m.list.Select(0)
-				if m.visualMode {
-					m.visualEnd = 0
-					m.updateVisualSelection()
-				}
-				m.setStatusWithFeedback("Moved to first file")
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.GoToBottom):
-			// Go to the last item in the list
-			if itemCount := len(m.list.Items()); itemCount > 0 {
-				m.list.Select(itemCount - 1)
-				if m.visualMode {
-					m.visualEnd = itemCount - 1
-					m.updateVisualSelection()
-				}
-				m.setStatusWithFeedback("Moved to last file")
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.VisualLine):
-			// Toggle visual line mode - select all files
-			m.visualMode = !m.visualMode
-			if m.visualMode {
-				// Select all items
-				m.visualStart = 0
-				if itemCount := len(m.list.Items()); itemCount > 0 {
-					m.visualEnd = itemCount - 1
-				} else {
-					m.visualEnd = 0
-				}
-				m.updateVisualSelection()
-				m.setStatusWithFeedback("Visual line mode - all files selected")
-			} else {
-				m.setStatusWithFeedback("Visual mode disabled")
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.Search):
-			// Enter search mode
-			m.mode = types.Command
-			m.commandBuffer = "/search "
-			m.setStatusWithFeedback("Search mode - type a pattern and press Enter")
-			return m, nil
-
-		default:
-			// Let the list handle the message
-			var newCmd tea.Cmd
-			m.list, newCmd = m.list.Update(msg)
-			cmd = newCmd
-		}
-
-		// If in visual mode, update the selection when navigating
-		if m.visualMode {
-			m.visualEnd = m.list.Index()
-			m.updateVisualSelection()
-		}
-
-		// --- BEGIN REVISED SELECTION LOGIC ---
-		// If the original key was 'Select', update our selection state based on the item captured *before* the list update.
-		if isSelectKey && itemToSelect.entry.Path != "" { // Check flag and if item was successfully captured
-			path := itemToSelect.entry.Path // Use the path of the item that *was* selected when space was pressed
-			selectedCountBefore := len(m.selectedFiles)
-
-			if _, ok := m.selectedFiles[path]; ok {
-				// Item exists in our map, so deselect it
-				delete(m.selectedFiles, path)
-				// Find the index of the item we toggled to update its visual state
-				currentIndex := -1
-				for i, currentItem := range m.list.Items() {
-					if currentItem.(Item).entry.Path == path {
-						currentIndex = i
-						break
-					}
-				}
-				if currentIndex != -1 {
-					m.updateItemSelection(currentIndex, false) // Restore visual update
-				}
-				m.setStatusWithFeedback(fmt.Sprintf("Deselected '%s' (Before: %d, After: %d)", filepath.Base(path), selectedCountBefore, len(m.selectedFiles)))
-			} else {
-				// Item doesn't exist in our map, so select it
-				m.selectedFiles[path] = true
-				// Find the index of the item we toggled to update its visual state
-				currentIndex := -1
-				for i, currentItem := range m.list.Items() {
-					if currentItem.(Item).entry.Path == path {
-						currentIndex = i
-						break
-					}
-				}
-				if currentIndex != -1 {
-					m.updateItemSelection(currentIndex, true) // Restore visual update
-				}
-				m.setStatusWithFeedback(fmt.Sprintf("Selected '%s' (Before: %d, After: %d)", filepath.Base(path), selectedCountBefore, len(m.selectedFiles)))
-			}
-		} else if isSelectKey {
-			m.setStatusWithFeedback("Select key pressed, but failed to capture item?")
-		}
-		// --- END REVISED SELECTION LOGIC ---
-
-		return m, cmd
-
-	default:
-		// Let component models handle other message types
-		var cmds []tea.Cmd
-
-		// Update the list
-		var listCmd tea.Cmd
-		m.list, listCmd = m.list.Update(msg)
-		if listCmd != nil {
-			cmds = append(cmds, listCmd)
-		}
-
-		// Update the viewport
-		var viewportCmd tea.Cmd
-		m.viewport, viewportCmd = m.viewport.Update(msg)
-		if viewportCmd != nil {
-			cmds = append(cmds, viewportCmd)
-		}
-
+		cmds = append(cmds, m.setStatus(fmt.Sprintf("Directory '%s' deleted", msg.name)))
+		cmds = append(cmds, m.loadDirectory(m.currentDir)) // Refresh list
 		return m, tea.Batch(cmds...)
+
+	case fileDeletedMsg:
+		if msg.err != nil {
+			cmds = append(cmds, m.setStatus(fmt.Sprintf("Error deleting file: %v", msg.err)))
+			return m, tea.Batch(cmds...)
+		}
+		cmds = append(cmds, m.setStatus(fmt.Sprintf("File '%s' deleted", msg.name)))
+		cmds = append(cmds, m.loadDirectory(m.currentDir)) // Refresh list
+		return m, tea.Batch(cmds...)
+
+	case fileRenamedMsg:
+		if msg.err != nil {
+			cmds = append(cmds, m.setStatus(fmt.Sprintf("Error renaming: %v", msg.err)))
+			return m, tea.Batch(cmds...)
+		}
+		cmds = append(cmds, m.setStatus(fmt.Sprintf("Renamed '%s' to '%s'", msg.oldName, msg.newName)))
+		cmds = append(cmds, m.loadDirectory(m.currentDir)) // Refresh list
+		return m, tea.Batch(cmds...)
+
+	case filesSelectedMsg: // Example: external process signals selection change
+		m.selectedFiles = msg.selected
+		// Visually update the list items based on this external change
+		// This might require iterating through m.list.Items() and calling SetItem
+		// Or trigger a full list refresh if simpler
+		cmds = append(cmds, m.loadDirectory(m.currentDir)) // Refresh to ensure consistency
+		return m, tea.Batch(cmds...)
+
+		// Handle generic error messages if specific types aren't used
+	case error: // Catch-all for error types if specific msgs aren't used
+		m.statusMsg = fmt.Sprintf("Error: %v", msg)
+		m.commandInput = ""
+		m.mode = types.Visual // Exit command mode on error
+		return m, nil
+
+	case tea.KeyMsg:
+		// Handle key presses based on mode
+		switch m.mode {
+		case types.Command:
+			return m.handleCommandMode(msg)
+		case types.Visual:
+			// Visual mode keys might be handled within normal keys or separately
+			return m.handleNormalKeys(msg) // Assuming shared handling for now
+		case types.Normal:
+			return m.handleNormalKeys(msg)
+		default:
+			return m, nil // Should not happen
+		}
+
+	// Default Case: Bubble Tea internal messages or unknown messages
+	default:
+		// Pass messages to components that might need them
+		// Order might matter depending on focus
+		// Handle viewport scrolling if it's the active focus
+		// Check m.activeView or another focus indicator if implemented
+		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
+
+		// Handle list updates (navigation, filtering)
+		m.list, cmd = m.list.Update(msg)
+		cmds = append(cmds, cmd)
+
+		// Update file tree if it exists
+		if m.fileTree != nil {
+			// Since fileTree is not directly implementing tea.Model, we need to handle it differently
+			// For now, we'll just update its state without calling Update directly
+			// We'll implement proper update logic for fileTree in a future PR
+		}
+
+		// Handle help model updates
+		m.help, cmd = m.help.Update(msg)
+		cmds = append(cmds, cmd)
 	}
+
+	// After handling the message, update the viewport content if necessary
+	// This ensures previews are updated after list navigation or file changes
+	m.updateViewportContent() // Ensure this method exists and is correct
+
+	// Batch all collected commands
+	return m, tea.Batch(cmds...)
 }
 
+// handleNormalKeys handles key presses in Normal, Visual, and VisualLine modes
 func (m *Model) handleNormalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
@@ -944,7 +767,7 @@ func (m *Model) handleNormalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.CommandMode):
-		m.mode = types.Command
+		m.mode = types.Normal
 		m.commandBuffer = ":"
 		return m, nil
 
@@ -1060,13 +883,13 @@ func (m *Model) handleNormalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) handleCommandMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.mode = types.Normal
+		m.mode = types.Visual
 		m.commandBuffer = ""
 		return m, nil
 
 	case tea.KeyEnter:
 		cmd := m.commandBuffer[1:] // Remove the leading ':'
-		m.mode = types.Normal
+		m.mode = types.Visual
 		m.commandBuffer = ""
 		return m.executeCommand(cmd)
 
@@ -1408,3 +1231,97 @@ func (m *Model) headerView() string {
 	// Create a nice panel for the header content
 	return styles.DefaultTheme.Panel.Render(headerContent.String())
 }
+
+func (m *Model) loadDirectory(dir string) tea.Cmd {
+	m.loading = true
+	m.statusMsg = fmt.Sprintf("Loading %s...", dir)
+	// In a real app, this would return a tea.Cmd that fetches data
+	// and sends back a filesLoadedMsg or errorMsg
+	return func() tea.Msg {
+		// Simulate loading time and success/error
+		time.Sleep(50 * time.Millisecond)
+		// Example success:
+		return filesLoadedMsg{files: []types.FileEntry{{Name: "file1.txt"}, {Name: "subdir", IsDir: true}}, err: nil}
+		// Example error:
+		// return errorMsg{err: fmt.Errorf("failed to read %s", dir)}
+	}
+}
+
+func (m *Model) updateViewportContent() {
+	selectedItem := m.list.SelectedItem()
+	if selectedItem == nil {
+		m.viewport.SetContent("No file selected.")
+		return
+	}
+
+	item := selectedItem.(Item)
+	if item.entry.IsDir {
+		// Maybe show directory stats or analysis results?
+		m.viewport.SetContent(fmt.Sprintf("Directory: %s", item.entry.Name))
+	} else {
+		// In a real app, load file content here async
+		// For now, just show basic info
+		m.viewport.SetContent(fmt.Sprintf("File: %s\nSize: %s\nType: %s",
+			item.entry.Name,
+			formatSize(item.entry.Size),
+			item.entry.ContentType))
+	}
+	// Ensure viewport scrolls to top after content change
+	m.viewport.GotoTop()
+}
+
+func (m *Model) getCurrentPreviewContent() string {
+	// This is a simplified version of what updateViewportContent does
+	// It should return the string content directly
+	selectedItem := m.list.SelectedItem()
+	if selectedItem == nil {
+		return "No file selected."
+	}
+	item := selectedItem.(Item)
+	if item.entry.IsDir {
+		return fmt.Sprintf("Directory: %s", item.entry.Name)
+	}
+	// Simulate getting file preview content
+	return fmt.Sprintf("Preview for: %s\nSize: %s", item.entry.Name, formatSize(item.entry.Size))
+}
+
+func (m *Model) handleError(err error) (tea.Model, tea.Cmd) {
+	m.statusMsg = fmt.Sprintf("Error: %v", err)
+	m.commandInput = ""
+	m.mode = types.Visual // Exit command mode on error
+	// Potentially add a timer to clear the error message
+	// Return a command to set the status message which includes a clear timer
+	return m, m.setStatus(m.statusMsg)
+}
+
+// renderStatusBar renders the status bar at the bottom of the screen
+// setStatus is a helper to set the status message and potentially trigger a clear timer
+func (m *Model) setStatus(msg string) tea.Cmd {
+	m.statusMsg = msg
+	// Optional: Add a timer to clear the message
+	return tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
+		if m.statusMsg == msg { // Check if message is still the same
+			return statusMessage("")
+		}
+		return nil
+	})
+}
+
+// renderStatusBar renders the status bar at the bottom of the screen
+func (m *Model) renderStatusBar() string {
+	// Create a styled status bar with the current status message
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#333333")).Padding(0, 1)
+
+	// Show help hint or status message
+	statusText := m.statusMsg
+	if statusText == "" {
+		statusText = "Press ? for help"
+	}
+
+	// Create the status bar with full width
+	statusBar := statusStyle.Width(m.width).Render(statusText)
+
+	return statusBar
+}
+
+// End of file
