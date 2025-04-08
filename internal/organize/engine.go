@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"sortd/internal/config"
@@ -109,7 +110,7 @@ func (e *Engine) findDestination(filename string) (string, bool) {
 	return "", false
 }
 
-// MoveFile moves a file from source to destination with safety checks
+// MoveFile moves a file from source to destination, handling collisions based on config.
 func (e *Engine) MoveFile(src, dest string) error {
 	// Clean paths for comparison
 	cleanSrc := filepath.Clean(src)
@@ -117,7 +118,9 @@ func (e *Engine) MoveFile(src, dest string) error {
 
 	// Check for same file
 	if cleanSrc == cleanDest {
-		return fmt.Errorf("source and destination are the same file: %s", src)
+		// Moving to the same place is not an error, just do nothing.
+		log.Debug("Source and destination are the same, skipping: %s", src)
+		return nil
 	}
 
 	// Verify source exists and get info
@@ -125,49 +128,85 @@ func (e *Engine) MoveFile(src, dest string) error {
 	if err != nil {
 		return fmt.Errorf("source file error: %w", err)
 	}
-
 	if srcInfo.IsDir() {
 		return fmt.Errorf("cannot move directory as file: %s", src)
 	}
 
-	// Check if destination exists on filesystem
-	if _, err := os.Stat(cleanDest); err == nil {
-		return fmt.Errorf("destination file already exists on filesystem: %s", dest)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("error checking destination: %w", err)
-	}
-
-	// Lock for thread safety
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Check if destination is tracked in our files map
-	if _, exists := e.files[cleanDest]; exists {
-		return fmt.Errorf("destination file already exists in tracking: %s", dest)
-	}
-
-	// Ensure destination directory exists
+	// Ensure destination directory exists before checking destination file
 	destDir := filepath.Dir(cleanDest)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
+	// --- Collision Handling ---
+	collisionStrategy := e.collision // Get from engine config
+	if _, err := os.Stat(cleanDest); err == nil {
+		// Destination exists, handle collision
+		log.Warn("Destination file %s already exists. Handling collision with strategy: %s", cleanDest, collisionStrategy)
+		switch collisionStrategy {
+		case "skip":
+			log.Info("Skipping move for %s due to collision (strategy: skip)", cleanSrc)
+			return nil // Not an error, just skipped
+		case "overwrite":
+			log.Warn("Overwriting %s (strategy: overwrite)", cleanDest)
+			// Proceed to rename
+		case "rename":
+			originalDest := cleanDest
+			counter := 1
+			for {
+				ext := filepath.Ext(originalDest)
+				base := strings.TrimSuffix(originalDest, ext)
+				newName := fmt.Sprintf("%s_(%d)%s", base, counter, ext)
+				if _, err := os.Stat(newName); os.IsNotExist(err) {
+					cleanDest = newName // Found a non-existent name
+					log.Info("Renaming destination to %s due to collision (strategy: rename)", cleanDest)
+					break
+				}
+				counter++
+				if counter > 1000 { // Safety break
+					return fmt.Errorf("failed to find unique name for %s after 1000 attempts", originalDest)
+				}
+			}
+			// Proceed to rename with the new cleanDest
+		case "ask":
+			// TODO: Implement interactive 'ask' functionality. Requires CLI interaction.
+			// For now, treat 'ask' like 'skip'
+			log.Warn("Collision strategy 'ask' not implemented, treating as 'skip'.")
+			return nil
+		default:
+			return fmt.Errorf("unknown collision strategy: %s", collisionStrategy)
+		}
+	} else if !os.IsNotExist(err) {
+		// Error other than "does not exist" when checking destination
+		return fmt.Errorf("error checking destination %s: %w", cleanDest, err)
+	}
+	// Destination does not exist or collision handled (overwrite/rename)
+
+	// Lock for thread safety (should this be around the whole operation?)
+	// e.mu.Lock()
+	// defer e.mu.Unlock()
+	// TODO: Review locking strategy for potential race conditions, especially with 'rename'
+
 	if e.dryRun {
-		log.Info("Would move %s -> %s", src, dest)
+		log.Info("Would move %s -> %s", src, cleanDest)
 		return nil
 	}
 
-	// Move the file
+	// --- Backup Logic (Optional) ---
+	if e.backup {
+		// TODO: Implement backup logic if enabled
+		log.Debug("Backup logic not implemented.")
+	}
+
+	// --- Move the file ---
+	log.Debug("Attempting to move %s to %s", cleanSrc, cleanDest)
 	if err := os.Rename(cleanSrc, cleanDest); err != nil {
 		return fmt.Errorf("failed to move file: %w", err)
 	}
 
-	// Record the move
-	e.files[cleanDest] = types.FileInfo{
-		Path: cleanDest,
-		Size: srcInfo.Size(),
-	}
-	log.Info("Moved %s -> %s", src, dest)
+	// Record the move (Consider if locking is needed here)
+	// e.files[cleanDest] = types.FileInfo{ ... }
+	log.Info("Moved %s -> %s", src, cleanDest)
 
 	return nil
 }

@@ -122,7 +122,7 @@ func TestLoadConfigFile(t *testing.T) {
 
 		require.Error(t, err, "Loading config with invalid watch directories should return an error")
 		assert.Contains(t, err.Error(), "invalid configuration", "Error message should indicate validation failure")
-		assert.Contains(t, err.Error(), "path cannot be empty", "Error message should specify the validation issue")
+		assert.Contains(t, err.Error(), "watch directory 0: path cannot be empty", "Error message should specify the validation issue")
 	})
 }
 
@@ -154,6 +154,7 @@ func TestConfigValidation(t *testing.T) {
 					Default: "/home/test",
 					Watch:   []string{"/home/test/docs", "/home/test/images"},
 				},
+				WatchDirectories: []string{"/valid/watch/dir"},
 			},
 			wantErr: false,
 		},
@@ -178,6 +179,7 @@ func TestConfigValidation(t *testing.T) {
 					Default: "/home/test",
 					Watch:   []string{"/home/test/docs", "/home/test/images"},
 				},
+				WatchDirectories: []string{"/valid/watch/dir"},
 			},
 			wantErr: true,
 		},
@@ -202,6 +204,7 @@ func TestConfigValidation(t *testing.T) {
 					Default: "/home/test",
 					Watch:   []string{"/home/test/docs", "/home/test/images"},
 				},
+				WatchDirectories: []string{"/valid/watch/dir"},
 			},
 			wantErr: true,
 		},
@@ -226,6 +229,7 @@ func TestConfigValidation(t *testing.T) {
 					Default: "/home/test",
 					Watch:   []string{"/home/test/docs", "/home/test/images"},
 				},
+				WatchDirectories: []string{"/valid/watch/dir"},
 			},
 			wantErr: true,
 		},
@@ -248,8 +252,9 @@ func TestConfigValidation(t *testing.T) {
 					Watch   []string `yaml:"watch"`
 				}{
 					Default: "/home/test",
-					Watch:   []string{""},
+					Watch:   []string{},
 				},
+				WatchDirectories: []string{""},
 			},
 			wantErr: true,
 		},
@@ -258,10 +263,15 @@ func TestConfigValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.config.Validate()
-			if tt.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil && tt.wantErr {
+				t.Logf("Received expected error: %v", err)
+			} else if err == nil && !tt.wantErr {
+				t.Logf("Validation passed as expected.")
+			} else if err == nil && tt.wantErr {
+				t.Errorf("An error is expected but got nil.")
 			}
 		})
 	}

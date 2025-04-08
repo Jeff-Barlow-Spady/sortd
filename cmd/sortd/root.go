@@ -18,6 +18,10 @@ var (
 	Version = "0.1.0" // Adding Version definition
 )
 
+// Note: During the transition to the idiomatic approach, we use a factory pattern
+// where NewRootCmd() creates the basic command structure and commands defined in
+// root.go, while main.go adds any commands defined there to avoid duplication.
+
 // NewRootCmd creates the root command
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
@@ -81,7 +85,7 @@ func NewRootCmd() *cobra.Command {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.config/sortd/config.yaml)")
 
-	// Add subcommands
+	// Add built-in commands from this file
 	rootCmd.AddCommand(NewSetupCmd())
 	rootCmd.AddCommand(NewOrganizeCmd())
 	rootCmd.AddCommand(NewRulesCmd())
@@ -93,7 +97,8 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(NewAnalyzeCmd())
 	rootCmd.AddCommand(NewScanCmd())
 	rootCmd.AddCommand(NewConfirmCmd())
-	rootCmd.AddCommand(NewGUICmd())
+
+	// Note: Commands defined in main.go will be added there
 
 	return rootCmd
 }
@@ -455,3 +460,5 @@ func Execute() {
 		os.Exit(1)
 	}
 }
+
+// GUI command implementation has been moved to avoid duplication

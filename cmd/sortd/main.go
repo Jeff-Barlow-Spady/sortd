@@ -26,27 +26,24 @@ var (
 
 // Entry point for the application
 func main() {
-	// Create the root command
-	rootCmd := &cobra.Command{
-		Use:     "sortd",
-		Short:   "A file sorting utility",
-		Long:    `Sortd helps you organize files by pattern, content, and more.`,
-		Version: version,
-		// No Run or RunE function here - default behavior should be to show help
-	}
+	// Get the root command from the factory function in root.go
+	rootCmd := NewRootCmd()
+
+	// Set the version from this file
+	rootCmd.Version = version
 
 	// Prepend logo to help message
 	helpTemplate := cli.DrawSortdLogo() + "\n\n" + rootCmd.UsageTemplate()
 	rootCmd.SetUsageTemplate(helpTemplate)
 	rootCmd.SetHelpTemplate(helpTemplate)
 
-	// Add subcommands
+	// Add commands that are only defined in main.go
 	rootCmd.AddCommand(analyzeCmd())
-	rootCmd.AddCommand(organizeCmd()) // Re-add organizeCmd
+	rootCmd.AddCommand(organizeCmd())
 	rootCmd.AddCommand(tuiCmd())
 	rootCmd.AddCommand(guiCmd())
 	rootCmd.AddCommand(watchCmd())
-	rootCmd.AddCommand(daemonCmd) // Add daemon control commands
+	rootCmd.AddCommand(daemonCmd)
 
 	// Initialize workflow commands
 	initWorkflowCommands(rootCmd)
@@ -373,7 +370,7 @@ var daemonStatusCmd = &cobra.Command{
 		}
 		status, err := watch.Status(cfg)
 		if err != nil {
-			log.Error("Failed to get daemon status: %v", err)
+			log.Errorf("Failed to get daemon status: %v", err)
 			return
 		}
 
@@ -395,7 +392,7 @@ var daemonStopCmd = &cobra.Command{
 			return
 		}
 		if err := watch.StopDaemon(cfg); err != nil {
-			log.Error("Failed to stop daemon: %v", err)
+			log.Errorf("Failed to stop daemon: %v", err)
 			return
 		}
 		fmt.Println("Daemon stopped successfully")
