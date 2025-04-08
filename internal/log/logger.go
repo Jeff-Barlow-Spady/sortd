@@ -58,3 +58,13 @@ func (l *Logger) log(level, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	fmt.Fprintf(l.out, "[%s] %s: %s\n", timestamp, level, msg)
 }
+
+// Warn logs a warning message with arguments
+func Warn(msg string, args ...interface{}) {
+	logger.log("WARN", msg+": %v", args...)
+}
+
+// Warnf logs a formatted warning message
+func Warnf(format string, args ...interface{}) {
+	logger.log("WARN", format, args...)
+}

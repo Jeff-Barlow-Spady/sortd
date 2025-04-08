@@ -147,16 +147,24 @@ func RunGumFile(args ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
-// DrawSortdLogo returns a colorful ASCII logo
+// DrawSortdLogo generates the ASCII art logo for sortd.
 func DrawSortdLogo() string {
+	// Define the logo as a multiline string
 	logo := `
-   _____ ____  _____ _______ _____
-  / ____|/ __ \|  __ \__   __|  __ \
- | (___ | |  | | |__) | | |  | |  | |
-  \___ \| |  | |  _  /  | |  | |  | |
-  ____) | |__| | | \ \  | |  | |__| |
- |_____/ \____/|_|  \_\ |_|  |_____/
-
+   █████████     ███████    ███████████   ███████████ ██████████  
+ ███░░░░░███   ███░░░░░███ ░░███░░░░░███ ░█░░░███░░░█░░███░░░░███ 
+░███     ░░░  ███     ░░███ ░███    ░███ ░    ░███  ░  ░███    ░░███
+░░█████████  ░███      ░███ ░██████████       ░███     ░███    ░███
+ ░░░░░░░░███ ░███      ░███ ░███░░░░░███      ░███     ░███    ░███
+ ███     ███ ░░███     ███  ░███    ░███      ░███     ░███    ███ 
+░░█████████   ░░░███████░   █████   █████     █████     ██████████  
+ ░░░░░░░░░       ░░░░░░░    ░░░░░   ░░░░░     ░░░░░     ░░░░░░░░░░   
 `
+
 	return colorCyan + logo + colorReset
+}
+
+// ChooseDirectory prompts the user to select a directory using Gum.
+func ChooseDirectory() string {
+	return RunGumFile("--directory")
 }

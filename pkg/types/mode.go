@@ -16,7 +16,7 @@ const (
 
 // ModelReader defines the interface that views use to read model state
 type ModelReader interface {
-	Files() []FileEntry
+	Files() []*FileInfo
 	IsSelected(name string) bool
 	Cursor() int
 	ShowHelp() bool
@@ -36,3 +36,6 @@ type FileEntry struct {
 }
 
 // FilterValue is required by the list component for filtering.
+type FilterValue struct {
+	Value string
+}

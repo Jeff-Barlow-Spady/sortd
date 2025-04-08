@@ -21,6 +21,11 @@ func (f *FileInfo) Name() string {
 	return filepath.Base(f.Path)
 }
 
+// FilterValue implements list.Item interface for filtering
+func (f FileInfo) FilterValue() string {
+	return f.Name()
+}
+
 // ToJSON converts FileInfo to JSON string
 func (f *FileInfo) ToJSON() string {
 	jsonBytes, _ := json.Marshal(f)

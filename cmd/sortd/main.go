@@ -8,10 +8,11 @@ import (
 	"sortd/internal/analysis"
 	"sortd/internal/organize"
 	"sortd/internal/tui"
-	"strings"
 
 	"sortd/internal/config"
 	"sortd/internal/gui"
+
+	"sortd/cmd/sortd/cli"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -23,80 +24,23 @@ var (
 
 // Entry point for the application
 func main() {
-	// Global flags for all commands
-	var (
-		guiMode        bool
-		backgroundMode bool
-		watchMode      bool
-		watchDir       string
-		watchInterval  int
-	)
-
 	// Create the root command
 	rootCmd := &cobra.Command{
 		Use:     "sortd",
 		Short:   "A file sorting utility",
 		Long:    `Sortd helps you organize files by pattern, content, and more.`,
 		Version: version,
-		Run: func(cmd *cobra.Command, args []string) {
-			// Check special modes in order of precedence
-			if guiMode {
-				// Launch the GUI interface
-				fmt.Println("Launching GUI interface...")
-
-				if err := runGUI(); err != nil {
-					fmt.Printf("Error launching GUI: %v\n", err)
-					os.Exit(1)
-				}
-				return
-			}
-
-			if watchMode {
-				// Start in watch mode
-				fmt.Println("Starting watch mode...")
-
-				// Set up watch directory
-				if watchDir == "" {
-					var err error
-					watchDir, err = os.Getwd()
-					if err != nil {
-						fmt.Printf("Error getting current directory: %v\n", err)
-						os.Exit(1)
-					}
-				}
-
-				fmt.Printf("Watching directory: %s (interval: %d seconds)\n", watchDir, watchInterval)
-
-				if backgroundMode {
-					fmt.Println("Running in background mode")
-					// Here we'd daemonize the process for background watching
-					// For now, just simulate with a simple message
-					fmt.Println("Background mode simulation - would fork to background here")
-				} else {
-					// Run watch mode in foreground
-					fmt.Println("Running in foreground mode. Press Ctrl+C to stop.")
-					// Here we'd implement an actual watch loop
-					fmt.Println("Watch mode simulation - would start watching now")
-				}
-				return
-			}
-
-			// Default to TUI if no special flags
-			fmt.Println("Starting TUI mode...")
-			tuiCmd().Run(cmd, args)
-		},
+		// No Run or RunE function here - default behavior should be to show help
 	}
 
-	// Add global flags
-	rootCmd.Flags().BoolVar(&guiMode, "gui", false, "Start in GUI mode with system tray icon")
-	rootCmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Start in watch mode to automatically organize files")
-	rootCmd.Flags().StringVarP(&watchDir, "dir", "d", "", "Directory to watch (default is current directory)")
-	rootCmd.Flags().IntVarP(&watchInterval, "interval", "i", 300, "Watch interval in seconds (default 300)")
-	rootCmd.Flags().BoolVarP(&backgroundMode, "background", "b", false, "Run in background mode")
+	// Prepend logo to help message
+	helpTemplate := cli.DrawSortdLogo() + "\n\n" + rootCmd.UsageTemplate()
+	rootCmd.SetUsageTemplate(helpTemplate)
+	rootCmd.SetHelpTemplate(helpTemplate)
 
 	// Add subcommands
 	rootCmd.AddCommand(analyzeCmd())
-	rootCmd.AddCommand(organizeCmd())
+	rootCmd.AddCommand(organizeCmd()) // Re-add organizeCmd
 	rootCmd.AddCommand(tuiCmd())
 	rootCmd.AddCommand(guiCmd())
 	rootCmd.AddCommand(watchCmd())
@@ -106,6 +50,87 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+// organizeCmd represents the organize command - REINSTATED
+func organizeCmd() *cobra.Command {
+	var dir string
+	var dryRun bool
+
+	cmd := &cobra.Command{
+		Use:   "organize [directory]",
+		Short: "Organize files in a directory",
+		Long:  `Organize files in a directory based on patterns and content analysis.`,
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Determine the target directory
+			targetDir := dir // Use flag first
+			if targetDir == "" && len(args) > 0 {
+				targetDir = args[0] // Use argument if flag not set
+			}
+			if targetDir == "" {
+				var err error
+				targetDir, err = os.Getwd() // Default to current directory
+				if err != nil {
+					return fmt.Errorf("error getting current directory: %w", err)
+				}
+			}
+
+			// Load configuration
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				fmt.Printf("Warning: Could not load config: %v. Using default settings.\n", err)
+				cfg = config.New()
+			}
+			if cmd.Flags().Changed("dry-run") {
+				cfg.Settings.DryRun = dryRun
+			}
+
+			// Create the organize engine
+			engine := organize.NewWithConfig(cfg)
+
+			// Perform organization
+			if cfg.Settings.DryRun {
+				fmt.Printf("Dry run: Planning organization for directory '%s'\n", targetDir)
+			} else {
+				fmt.Printf("Organizing directory '%s'\n", targetDir)
+			}
+
+			results, err := engine.OrganizeDirectory(targetDir)
+			if err != nil {
+				return fmt.Errorf("error organizing directory: %w", err)
+			}
+
+			// Print results
+			if len(results) == 0 {
+				fmt.Println("No files needed organization.")
+			} else {
+				fmt.Printf("Organization Summary (%d actions taken):\n", len(results))
+				for _, res := range results {
+					status := "Moved"
+					if !res.Moved {
+						status = "Skipped"
+						if res.Error != nil {
+							status = fmt.Sprintf("Error: %v", res.Error)
+						}
+					}
+					fmt.Printf("  - %s -> %s (%s)\n", res.SourcePath, res.DestinationPath, status)
+				}
+			}
+
+			if cfg.Settings.DryRun {
+				fmt.Println("\nDry run complete. No files were moved.")
+			} else {
+				fmt.Println("\nOrganization complete.")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&dir, "directory", "d", "", "Directory to organize (overrides argument, defaults to current directory)")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "Show what would be done without actually moving files")
+
+	return cmd
 }
 
 // runGUI launches the GUI directly
@@ -228,73 +253,6 @@ func analyzeCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&dir, "directory", "d", "", "Directory to analyze (default is current directory)")
 	cmd.Flags().BoolVarP(&detailed, "detailed", "v", false, "Show detailed listing of files")
-
-	return cmd
-}
-
-// organizeCmd represents the organize command
-func organizeCmd() *cobra.Command {
-	var dir string
-	var dryRun bool
-
-	cmd := &cobra.Command{
-		Use:   "organize",
-		Short: "Organize files in a directory",
-		Long:  `Organize files in a directory based on patterns and content analysis.`,
-		Run: func(cmd *cobra.Command, args []string) {
-			if dir == "" {
-				var err error
-				dir, err = os.Getwd()
-				if err != nil {
-					fmt.Println("Error getting current directory:", err)
-					return
-				}
-			}
-
-			// Create the organize engine
-			engine := organize.New()
-
-			// Get all files in the directory
-			var files []string
-			err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if !d.IsDir() && !strings.HasPrefix(filepath.Base(path), ".") {
-					files = append(files, path)
-				}
-				return nil
-			})
-			if err != nil {
-				fmt.Printf("Error walking directory: %v\n", err)
-				return
-			}
-
-			// If dry run, just show what would happen
-			if dryRun {
-				fmt.Println("Dry run: No files will be moved")
-
-				// Since we don't have a PlanOrganization method, we'll just show what files would be organized
-				fmt.Println("\nFiles that would be organized:")
-				for _, file := range files {
-					fmt.Printf("  %s\n", file)
-				}
-				return
-			}
-
-			// Actually organize the files
-			fmt.Println("Organizing files...")
-			err = engine.OrganizeByPatterns(files)
-			if err != nil {
-				fmt.Printf("Error organizing files: %v\n", err)
-				return
-			}
-			fmt.Println("Organization complete!")
-		},
-	}
-
-	cmd.Flags().StringVarP(&dir, "directory", "d", "", "Directory to organize (default is current directory)")
-	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "Show what would be done without actually moving files")
 
 	return cmd
 }

@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 	"strings"
+	"path/filepath"
 
 	"sortd/internal/tui/styles"
 	"sortd/pkg/types"
@@ -43,7 +44,8 @@ func RenderMainView(m types.ModelReader) string {
 
 		for i, file := range m.Files() {
 			style := styles.Theme.Unselected
-			if m.IsSelected(file.Name) {
+			fileName := filepath.Base(file.Path)
+			if m.IsSelected(fileName) {
 				style = styles.Theme.Selected
 			}
 
@@ -68,7 +70,7 @@ func RenderMainView(m types.ModelReader) string {
 				contentType = contentType[:12] + "..."
 			}
 
-			fileInfo := fmt.Sprintf("%-40s %-15s %10s", file.Name, contentType, sizeStr)
+			fileInfo := fmt.Sprintf("%-40s %-15s %10s", fileName, contentType, sizeStr)
 			sb.WriteString(fmt.Sprintf("%s %s\n", cursor, style.Render(fileInfo)))
 		}
 	}

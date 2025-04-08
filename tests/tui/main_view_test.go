@@ -16,14 +16,32 @@ type mockModel struct {
 	showHelp      bool
 	mode          types.Mode
 	currentDir    string
+	viewMode      types.ViewMode
 }
 
-func (m *mockModel) Files() []types.FileEntry    { return m.files }
-func (m *mockModel) IsSelected(name string) bool { return m.selectedFiles[name] }
-func (m *mockModel) Cursor() int                 { return m.cursor }
-func (m *mockModel) ShowHelp() bool              { return m.showHelp }
-func (m *mockModel) Mode() types.Mode            { return m.mode }
-func (m *mockModel) CurrentDir() string          { return m.currentDir }
+// Implement types.ModelReader interface for mockModel
+func (m *mockModel) Files() []*types.FileInfo {
+	// Convert []types.FileEntry to []*types.FileInfo for the interface
+	fileInfos := make([]*types.FileInfo, len(m.files))
+	for i, entry := range m.files {
+		fileInfos[i] = &types.FileInfo{
+			Path:        entry.Path,
+			ContentType: entry.ContentType,
+			Size:        entry.Size,
+			Tags:        entry.Tags,
+			// FileInfo doesn't have Name or IsDir, so these are omitted
+		}
+	}
+	return fileInfos
+}
+
+func (m *mockModel) SelectedFiles() map[string]bool { return m.selectedFiles }
+func (m *mockModel) Cursor() int                    { return m.cursor }
+func (m *mockModel) ShowHelp() bool                 { return m.showHelp }
+func (m *mockModel) Mode() types.Mode               { return m.mode }
+func (m *mockModel) CurrentDir() string             { return m.currentDir }
+func (m *mockModel) ViewMode() types.ViewMode       { return m.viewMode }
+func (m *mockModel) IsSelected(path string) bool    { return false } // Basic implementation
 
 func TestRenderHelp(t *testing.T) {
 	help := views.RenderHelp()
