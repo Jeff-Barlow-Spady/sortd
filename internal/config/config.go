@@ -18,7 +18,7 @@ type Config struct {
 	Organize struct {
 		Patterns []types.Pattern `yaml:"patterns"` // File organization patterns
 	} `yaml:"organize"`
-	Settings Settings `yaml:"settings"`
+	Settings    Settings `yaml:"settings"`
 	Directories struct {
 		Default string   `yaml:"default"` // Default working directory
 		Watch   []string `yaml:"watch"`   // Directories to watch
@@ -37,15 +37,15 @@ type Config struct {
 
 // Settings contains global configuration settings
 type Settings struct {
-	DryRun        bool   `yaml:"dry_run"`        // Run in dry run mode
-	CreateDirs    bool   `yaml:"create_dirs"`    // Create target directories if they don't exist
-	Confirm       bool   `yaml:"confirm"`       // Require confirmation before organizing files
-	MaxDepth      int    `yaml:"max_depth"`     // Maximum depth to search for files
+	DryRun         bool   `yaml:"dry_run"`         // Run in dry run mode
+	CreateDirs     bool   `yaml:"create_dirs"`     // Create target directories if they don't exist
+	Confirm        bool   `yaml:"confirm"`         // Require confirmation before organizing files
+	MaxDepth       int    `yaml:"max_depth"`       // Maximum depth to search for files
 	FollowSymlinks bool   `yaml:"follow_symlinks"` // Follow symbolic links
-	IgnoreHidden  bool   `yaml:"ignore_hidden"` // Ignore hidden files and directories
-	LogLevel      string `yaml:"log_level"`     // Log level (debug, info, warn, error)
-	Backup        bool   `yaml:"backup"`        // Create backups before moving
-	Collision     string `yaml:"collision"`     // Collision strategy: rename, skip, or ask
+	IgnoreHidden   bool   `yaml:"ignore_hidden"`   // Ignore hidden files and directories
+	LogLevel       string `yaml:"log_level"`       // Log level (debug, info, warn, error)
+	Backup         bool   `yaml:"backup"`          // Create backups before moving
+	Collision      string `yaml:"collision"`       // Collision strategy: rename, skip, or ask
 }
 
 // DaemonStatus represents the status of the watch daemon
@@ -128,15 +128,15 @@ func defaultConfig() *Config {
 
 	// Set default settings
 	cfg.Settings = Settings{
-		DryRun:        true,
-		CreateDirs:    true,
-		Confirm:       false,
-		MaxDepth:      10,
+		DryRun:         true,
+		CreateDirs:     true,
+		Confirm:        false,
+		MaxDepth:       10,
 		FollowSymlinks: false,
-		IgnoreHidden:  true,
-		LogLevel:      "info",
-		Backup:        false,
-		Collision:     "ask",
+		IgnoreHidden:   true,
+		LogLevel:       "info",
+		Backup:         false,
+		Collision:      "ask",
 	}
 
 	// Initialize directories struct
@@ -248,15 +248,15 @@ func NewTestConfig() *Config {
 		{Match: "*.jpg", Target: "images/"},
 	}
 	cfg.Settings = Settings{
-		DryRun:        false,
-		CreateDirs:    true,
-		Confirm:       false,
-		MaxDepth:      10,
+		DryRun:         false,
+		CreateDirs:     true,
+		Confirm:        false,
+		MaxDepth:       10,
 		FollowSymlinks: false,
-		IgnoreHidden:  true,
-		LogLevel:      "info",
-		Backup:        true,
-		Collision:     "rename",
+		IgnoreHidden:   true,
+		LogLevel:       "info",
+		Backup:         true,
+		Collision:      "rename",
 	}
 	return cfg
 }

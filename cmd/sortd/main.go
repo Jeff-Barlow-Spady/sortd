@@ -16,8 +16,8 @@ import (
 	"sortd/cmd/sortd/cli"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/spf13/cobra"
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -47,6 +47,9 @@ func main() {
 	rootCmd.AddCommand(guiCmd())
 	rootCmd.AddCommand(watchCmd())
 	rootCmd.AddCommand(daemonCmd) // Add daemon control commands
+
+	// Initialize workflow commands
+	initWorkflowCommands(rootCmd)
 
 	// Execute the command
 	if err := rootCmd.Execute(); err != nil {

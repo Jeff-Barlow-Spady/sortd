@@ -781,6 +781,21 @@ func (a *App) createOrganizeTab() fyne.CanvasObject {
 	)
 	presetSection := container.NewVBox(presetLabel, presetButtons)
 
+	// Workflow Management Section
+	workflowLabel := widget.NewLabelWithStyle("Advanced Workflows", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	createWorkflowButton := widget.NewButton("Create New Workflow", func() {
+		wizard := NewWorkflowWizard(a)
+		wizard.Show()
+	})
+
+	viewWorkflowsButton := widget.NewButton("View Existing Workflows", func() {
+		// This is a placeholder - would open workflow management UI
+		a.ShowInfo("Workflow management UI will be implemented here")
+	})
+
+	workflowButtons := container.NewGridWithColumns(2, createWorkflowButton, viewWorkflowsButton)
+	workflowSection := container.NewVBox(workflowLabel, workflowButtons)
+
 	// Command Input (Simple version)
 	commandLabel := widget.NewLabelWithStyle("Command Input (Experimental)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	commandEntry := widget.NewEntry()
@@ -802,6 +817,8 @@ func (a *App) createOrganizeTab() fyne.CanvasObject {
 			manualControls,
 			widget.NewSeparator(),
 			presetSection,
+			widget.NewSeparator(),
+			workflowSection,
 			widget.NewSeparator(),
 			commandSection,
 			layout.NewSpacer(), // Push content up
