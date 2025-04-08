@@ -114,15 +114,16 @@ func TestFileOrganization(t *testing.T) {
 				{Match: "*", Target: otherDest}, // Catch-all for others
 			},
 		},
-		Settings: struct {
-			DryRun     bool   `yaml:"dry_run"`
-			CreateDirs bool   `yaml:"create_dirs"`
-			Backup     bool   `yaml:"backup"`
-			Collision  string `yaml:"collision"`
-		}{
-			CreateDirs: true, // Ensure destination dirs are created
-			DryRun:     false,
-			Collision:  "skip", // Provide a default collision strategy for the test
+		Settings: config.Settings{
+			DryRun:        false,
+			CreateDirs:    true,
+			Confirm:       false,
+			MaxDepth:      10,
+			FollowSymlinks: false,
+			IgnoreHidden:  true,
+			LogLevel:      "info",
+			Backup:        false,
+			Collision:     "skip", // Provide a default collision strategy for the test
 		},
 	}
 
@@ -330,4 +331,74 @@ func TestOrganizationEdgeCases(t *testing.T) {
 		_, err = os.Stat(file)
 		assert.NoError(t, err, "File should still exist after failed same-location move")
 	})
+}
+
+func TestEngine_OrganizeByPatterns(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+
+	// Create test files
+	testFiles := []string{
+		"test.txt",
+		"image.jpg",
+		"archive.zip",
+	}
+	for _, file := range testFiles {
+		filePath := filepath.Join(tempDir, file)
+		require.NoError(t, os.WriteFile(filePath, []byte("test content"), 0644))
+	}
+
+	// Create config with patterns
+	cfg := &config.Config{
+		Organize: struct {
+			Patterns []types.Pattern `yaml:"patterns"`
+		}{
+			Patterns: []types.Pattern{
+				{Match: "*.txt", Target: "documents/"},
+				{Match: "*.jpg", Target: "images/"},
+				{Match: "*.zip", Target: "archives/"},
+			},
+		},
+		Settings: config.Settings{
+			DryRun:        false,
+			CreateDirs:    true,
+			Confirm:       false,
+			MaxDepth:      10,
+			FollowSymlinks: false,
+			IgnoreHidden:  true,
+			LogLevel:      "info",
+			Backup:        false,
+			Collision:     "rename",
+		},
+	}
+
+	// Create engine
+	engine := organize.NewWithConfig(cfg)
+
+	// Test organizing all files
+	filesToOrganize := make([]string, len(testFiles))
+	for i, file := range testFiles {
+		filesToOrganize[i] = filepath.Join(tempDir, file)
+	}
+
+	// Organize files
+	require.NoError(t, engine.OrganizeByPatterns(filesToOrganize))
+
+	// Verify files were moved
+	for _, file := range testFiles {
+		originalPath := filepath.Join(tempDir, file)
+		_, err := os.Stat(originalPath)
+		require.Error(t, err)
+		require.True(t, os.IsNotExist(err))
+
+		// Check target directory based on file extension
+		switch filepath.Ext(file) {
+		case ".txt":
+			require.FileExists(t, filepath.Join(tempDir, "documents", file))
+		case ".jpg":
+			require.FileExists(t, filepath.Join(tempDir, "images", file))
+		case ".zip":
+			require.FileExists(t, filepath.Join(tempDir, "archives", file))
+		}
+	}
 }

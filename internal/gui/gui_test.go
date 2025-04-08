@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+	"fyne.io/fyne/v2/layout"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -170,7 +170,7 @@ func TestGUI_OrganizeFilesButton(t *testing.T) {
 	// Traverse the widget tree to find the 'Organize Files' button
 	var organizeButton *widget.Button
 
-	// 1. Window Content -> Root Container (*fyne.Container, *layout.BorderLayout)
+	// 1. Window Content -> Root Container (*fyne.Container, *layout.NewBorderLayout)
 	winContent := w.Content()
 	require.NotNil(t, winContent, "Window content is nil")
 	rootContainer, ok := winContent.(*fyne.Container)
@@ -195,14 +195,14 @@ func TestGUI_OrganizeFilesButton(t *testing.T) {
 	require.NotNil(t, rightMax, "Right Max container is nil")
 	require.NotEmpty(t, rightMax.Objects, "Right Max container has no objects")
 
-	// 4. Max Container -> First Object (Details View - expect *fyne.Container with *layout.BorderLayout)
+	// 4. Max Container -> First Object (Details View - expect *fyne.Container with *layout.NewBorderLayout)
 	detailsContainerGeneric := rightMax.Objects[0]
 	require.NotNil(t, detailsContainerGeneric, "Details view generic object is nil")
 	detailsContainer, ok := detailsContainerGeneric.(*fyne.Container)
 	require.True(t, ok, "Details view assertion failed: expected *fyne.Container")
 	require.NotNil(t, detailsContainer, "Details container is nil")
-	detailsLayout, ok := detailsContainer.Layout.(*container.NewBorderLayout)
-	require.True(t, ok, "Details container layout assertion failed: expected *container.NewBorderLayout")
+	detailsLayout, ok := detailsContainer.Layout.(*layout.BorderLayout)
+	require.True(t, ok, "Details container layout assertion failed: expected *layout.BorderLayout")
 	require.NotNil(t, detailsLayout, "Details layout is nil")
 
 	// 5. Details Border Layout -> Bottom Object (Button Area - expect *container.Padded)

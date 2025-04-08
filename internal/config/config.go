@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"sortd/pkg/types"
 
@@ -17,12 +18,7 @@ type Config struct {
 	Organize struct {
 		Patterns []types.Pattern `yaml:"patterns"` // File organization patterns
 	} `yaml:"organize"`
-	Settings struct {
-		DryRun     bool   `yaml:"dry_run"`     // If true, simulate operations
-		CreateDirs bool   `yaml:"create_dirs"` // Create destination directories
-		Backup     bool   `yaml:"backup"`      // Create backups before moving
-		Collision  string `yaml:"collision"`   // Collision strategy: rename, skip, or ask
-	} `yaml:"settings"`
+	Settings Settings `yaml:"settings"`
 	Directories struct {
 		Default string   `yaml:"default"` // Default working directory
 		Watch   []string `yaml:"watch"`   // Directories to watch
@@ -37,6 +33,27 @@ type Config struct {
 		// is handled separately by the watch daemon/GUI, not via a config interval.
 	} `yaml:"watch_mode"`
 	WatchDirectories []string `yaml:"watch_directories"` // List of directories to monitor
+}
+
+// Settings contains global configuration settings
+type Settings struct {
+	DryRun        bool   `yaml:"dry_run"`        // Run in dry run mode
+	CreateDirs    bool   `yaml:"create_dirs"`    // Create target directories if they don't exist
+	Confirm       bool   `yaml:"confirm"`       // Require confirmation before organizing files
+	MaxDepth      int    `yaml:"max_depth"`     // Maximum depth to search for files
+	FollowSymlinks bool   `yaml:"follow_symlinks"` // Follow symbolic links
+	IgnoreHidden  bool   `yaml:"ignore_hidden"` // Ignore hidden files and directories
+	LogLevel      string `yaml:"log_level"`     // Log level (debug, info, warn, error)
+	Backup        bool   `yaml:"backup"`        // Create backups before moving
+	Collision     string `yaml:"collision"`     // Collision strategy: rename, skip, or ask
+}
+
+// DaemonStatus represents the status of the watch daemon
+type DaemonStatus struct {
+	Running          bool
+	WatchDirectories []string
+	LastActivity     time.Time
+	FilesProcessed   int
 }
 
 // LoadConfig loads configuration from the default location
@@ -76,12 +93,7 @@ func LoadConfigFile(path string) (*Config, error) {
 	if len(tempCfg.Organize.Patterns) > 0 {
 		cfg.Organize.Patterns = tempCfg.Organize.Patterns
 	}
-	if tempCfg.Settings.Collision != "" {
-		cfg.Settings.Collision = tempCfg.Settings.Collision
-	}
-	cfg.Settings.DryRun = tempCfg.Settings.DryRun
-	cfg.Settings.CreateDirs = tempCfg.Settings.CreateDirs
-	cfg.Settings.Backup = tempCfg.Settings.Backup
+	cfg.Settings = tempCfg.Settings
 
 	if tempCfg.Directories.Default != "" {
 		cfg.Directories.Default = tempCfg.Directories.Default
@@ -115,10 +127,17 @@ func defaultConfig() *Config {
 	cfg.Organize.Patterns = []types.Pattern{}
 
 	// Set default settings
-	cfg.Settings.DryRun = true     // Safe by default
-	cfg.Settings.CreateDirs = true // Create destination directories
-	cfg.Settings.Backup = false    // No backup by default
-	cfg.Settings.Collision = "ask" // Ask on collision by default
+	cfg.Settings = Settings{
+		DryRun:        true,
+		CreateDirs:    true,
+		Confirm:       false,
+		MaxDepth:      10,
+		FollowSymlinks: false,
+		IgnoreHidden:  true,
+		LogLevel:      "info",
+		Backup:        false,
+		Collision:     "ask",
+	}
 
 	// Initialize directories struct
 	cfg.Directories.Default = "." // Current directory by default
@@ -228,10 +247,17 @@ func NewTestConfig() *Config {
 		{Match: "*.txt", Target: "documents/"},
 		{Match: "*.jpg", Target: "images/"},
 	}
-	cfg.Settings.DryRun = false
-	cfg.Settings.CreateDirs = true
-	cfg.Settings.Backup = true
-	cfg.Settings.Collision = "rename"
+	cfg.Settings = Settings{
+		DryRun:        false,
+		CreateDirs:    true,
+		Confirm:       false,
+		MaxDepth:      10,
+		FollowSymlinks: false,
+		IgnoreHidden:  true,
+		LogLevel:      "info",
+		Backup:        true,
+		Collision:     "rename",
+	}
 	return cfg
 }
 

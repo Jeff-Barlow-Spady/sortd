@@ -20,7 +20,6 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -55,7 +54,13 @@ func NewApp(cfg *config.Config, organizeEngine *organize.Engine) *App {
 		log.Warnf("Could not load app icon from %s: %v", iconPath, err)
 	}
 
-	watchDaemon := watch.NewDaemon(cfg)
+	// Create and start the watch daemon
+	watchDaemon, err := watch.NewDaemon(cfg)
+	if err != nil {
+		log.Errorf("Failed to create watch daemon: %v", err)
+		// Don't exit - GUI can still be used without daemon
+		watchDaemon = nil
+	}
 
 	a := &App{
 		fyneApp:        fyneApp,
@@ -75,6 +80,26 @@ func NewApp(cfg *config.Config, organizeEngine *organize.Engine) *App {
 	a.setupSystemTray()
 
 	return a
+}
+
+// IsDaemonRunning checks if the watch daemon is running
+func (a *App) IsDaemonRunning() bool {
+	if a.watchDaemon == nil {
+		return false
+	}
+	return a.watchDaemon.Status().Running
+}
+
+// GetDaemonStatus returns the current daemon status
+func (a *App) GetDaemonStatus() string {
+	if a.watchDaemon == nil {
+		return "Daemon not initialized"
+	}
+	status := a.watchDaemon.Status()
+	if status.Running {
+		return "Running"
+	}
+	return "Stopped"
 }
 
 // setupSystemTray sets up the system tray icon and menu
@@ -136,7 +161,6 @@ func (a *App) Run() {
 func (a *App) setupMainWindow() {
 	bgColor := color.NRGBA{R: 16, G: 16, B: 16, A: 255}
 	accentColor := color.NRGBA{R: 255, G: 165, B: 0, A: 255}
-	borderColor := color.NRGBA{R: 255, G: 165, B: 0, A: 200}
 
 	background := canvas.NewRectangle(bgColor)
 	background.Resize(fyne.NewSize(900, 700))
@@ -159,129 +183,30 @@ func (a *App) setupMainWindow() {
 	logoDisplay.TextSize = 18
 	logoDisplay.Alignment = fyne.TextAlignCenter
 
-	fileListLabel := widget.NewLabelWithStyle("File Browser", fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true})
-
-	a.pathLabel = widget.NewLabelWithStyle("Location: "+a.cfg.Directories.Default,
-		fyne.TextAlignLeading,
-		fyne.TextStyle{Monospace: true})
-
-	pathHeader := container.NewVBox(
-		fileListLabel,
-		container.NewHBox(a.pathLabel),
-	)
-
-	fileList := widget.NewList(
-		func() int { files, _ := a.getDirectoryFiles(a.cfg.Directories.Default); return len(files) },
-		func() fyne.CanvasObject {
-			return container.NewHBox(
-				widget.NewIcon(theme.DocumentIcon()),
-				widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-			)
-		},
-		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			hbox := obj.(*fyne.Container)
-			iconObj := hbox.Objects[0].(*widget.Icon)
-			label := hbox.Objects[1].(*widget.Label)
-
-			files, err := a.getDirectoryFiles(a.cfg.Directories.Default)
-			if err != nil || id >= len(files) {
-				label.SetText("Error reading directory")
-				return
-			}
-
-			fileInfo := files[id]
-
-			if fileInfo.IsDir() {
-				iconObj.SetResource(theme.FolderIcon())
-			} else {
-				iconObj.SetResource(theme.DocumentIcon())
-			}
-			label.SetText(fileInfo.Name())
-		},
-	)
-
-	parentDirButton := widget.NewButton("↑ Parent Directory", func() {
-		parent := filepath.Dir(a.cfg.Directories.Default)
-		if parent != a.cfg.Directories.Default {
-			a.updateDirectoryPath(parent)
-			fileList.Refresh()
-		}
-	})
-	pathHeader.Add(parentDirButton)
-
-	fileListContainer := container.NewBorder(
-		pathHeader,
-		nil,
-		nil,
-		nil,
-		container.NewPadded(fileList),
-	)
-
-	selectedFilesLabel := widget.NewLabelWithStyle("Selected Files:", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true, Bold: true})
-
-	selectionEntry := widget.NewEntry()
-	selectionEntry.SetPlaceHolder("No files selected")
-	selectionEntry.Disable()
-
-	organizeButton := widget.NewButton("Organize Files", func() {
-		a.organizeEngine.SetDryRun(a.cfg.Settings.DryRun)
-		results, err := a.organizeEngine.OrganizeDirectory(a.cfg.Directories.Default)
-		if err != nil {
-			a.ShowError("Failed to organize directory", err)
-		} else {
-			var movedCount, errorCount int
-			var errors []string
-			for _, res := range results {
-				if res.Error != nil {
-					errorCount++
-					errors = append(errors, fmt.Sprintf("%s: %v", filepath.Base(res.SourcePath), res.Error))
-				} else if res.Moved {
-					movedCount++
-				}
-			}
-			msg := fmt.Sprintf("Organization complete. %d files processed/moved.", movedCount)
-			if errorCount > 0 {
-				msg += fmt.Sprintf("\nEncountered %d errors:\n%s", errorCount, strings.Join(errors, "\n"))
-				a.ShowError("Organization encountered errors", fmt.Errorf(strings.Join(errors, "\n"))) // Show first error
-			} else {
-				a.ShowInfo(msg)
-			}
-		}
-	})
-	organizeButton.Importance = widget.HighImportance
-
-	selectionContainer := container.NewBorder(
-		selectedFilesLabel,
-		container.NewPadded(organizeButton),
-		nil,
-		nil,
-		container.NewPadded(selectionEntry),
-	)
-
-	leftBorder := canvas.NewRectangle(color.Transparent)
-	leftBorder.StrokeColor = borderColor
-	leftBorder.StrokeWidth = 1
-
-	rightBorder := canvas.NewRectangle(color.Transparent)
-	rightBorder.StrokeColor = borderColor
-	rightBorder.StrokeWidth = 1
-
-	leftPanel := container.NewMax(leftBorder, fileListContainer)
-	rightPanel := container.NewMax(rightBorder, selectionContainer)
-
-	mainContent := container.NewHSplit(leftPanel, rightPanel)
-	mainContent.Offset = 0.4
-
-	content := container.NewBorder(
-		logoDisplay,
-		nil,
-		nil,
-		nil,
-		container.NewMax(background, mainContent),
-	)
-
-	a.mainWindow.SetContent(content)
+	// Set initial size before setting final content
 	a.mainWindow.Resize(fyne.NewSize(900, 700))
+
+	// --- Tabs Setup ---
+	tabs := container.NewAppTabs(
+		container.NewTabItem("Organize", a.createOrganizeTab()),
+		container.NewTabItem("Cloud", a.createCloudTab()),
+		container.NewTabItem("Settings", a.createSettingsTab()),
+	)
+	tabs.SetTabLocation(container.TabLocationTop) // Ensure tabs are at the top
+
+	// --- Main Layout ---
+	// Restore the Border layout with logo and tabs
+	finalContent := container.NewBorder(
+		logoDisplay, // Logo at the top
+		nil,         // Bottom
+		nil,         // Left
+		nil,         // Right
+		// Place tabs directly in the center, relying on theme for background
+		tabs,
+	)
+
+	// Set the final content using the restored layout
+	a.mainWindow.SetContent(finalContent)
 
 	a.mainWindow.SetCloseIntercept(func() {
 		a.mainWindow.Hide()
@@ -305,26 +230,6 @@ func (a *App) setupMainWindow() {
 			}
 		}
 	})
-
-	fileList.OnSelected = func(id widget.ListItemID) {
-		files, err := a.getDirectoryFiles(a.cfg.Directories.Default)
-		if err != nil || id >= len(files) {
-			return
-		}
-
-		fileInfo := files[id]
-
-		if fileInfo.IsDir() {
-			newPath := filepath.Join(a.cfg.Directories.Default, fileInfo.Name())
-			a.updateDirectoryPath(newPath)
-			fileList.Refresh()
-			fileList.UnselectAll()
-		} else {
-			selectionEntry.Enable()
-			selectionEntry.SetText(fileInfo.Name())
-			selectionEntry.Disable()
-		}
-	}
 }
 
 // GetMainWindow returns the main window for testing purposes
@@ -529,8 +434,9 @@ func (a *App) handleNaturalLanguageCommand(command string) {
 			}
 			msg := fmt.Sprintf("Organization complete. %d files processed/moved.", movedCount)
 			if errorCount > 0 {
-				msg += fmt.Sprintf("\nEncountered %d errors:\n%s", errorCount, strings.Join(errors, "\n"))
-				a.ShowError("Organization encountered errors", fmt.Errorf(strings.Join(errors, "\n"))) // Show first error
+				errorMsg := fmt.Sprintf("Encountered %d errors:\\n%s", errorCount, strings.Join(errors, "\\n"))
+				msg += "\\n" + errorMsg
+				a.ShowError("Organization encountered errors", fmt.Errorf(strings.Join(errors, "\\n"))) // Show first error
 			} else {
 				a.ShowInfo(msg)
 			}
@@ -550,6 +456,7 @@ func (a *App) handleNaturalLanguageCommand(command string) {
 
 // createSettingsTab creates the settings tab
 func (a *App) createSettingsTab() fyne.CanvasObject {
+	// --- General Settings ---
 	dryRunCheck := widget.NewCheck("Dry Run (Simulate Operations)", func(value bool) {
 		a.cfg.Settings.DryRun = value
 	})
@@ -583,22 +490,116 @@ func (a *App) createSettingsTab() fyne.CanvasObject {
 		a.cfg.Directories.Default = text
 	}
 
+	generalSettingsCard := widget.NewCard("General Settings", "", container.NewVBox(
+		dryRunCheck,
+		createDirsCheck,
+		backupCheck,
+		improvedCatCheck,
+		container.NewHBox(collisionLabel, collisionSelect),
+		container.NewHBox(defaultDirLabel, defaultDirEntry),
+	))
+
+	// --- Organization Rules ---
+	var ruleList *widget.List
+	selectedRuleIndex := -1
+
+	ruleList = widget.NewList(
+		func() int {
+			return len(a.cfg.Organize.Patterns)
+		},
+		func() fyne.CanvasObject {
+			// Template for each rule item
+			return container.NewHBox(
+				widget.NewLabel("Match: "),
+				widget.NewLabel("template match"),
+				layout.NewSpacer(),
+				widget.NewLabel("Target: "),
+				widget.NewLabel("template target"),
+			)
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			// Update the template with actual rule data
+			if id < 0 || id >= len(a.cfg.Organize.Patterns) {
+				return // Avoid index out of range
+			}
+			pattern := a.cfg.Organize.Patterns[id]
+			hbox := obj.(*fyne.Container)
+			matchLabel := hbox.Objects[1].(*widget.Label)
+			targetLabel := hbox.Objects[4].(*widget.Label)
+			matchLabel.SetText(pattern.Match)
+			targetLabel.SetText(pattern.Target)
+		},
+	)
+
+	ruleList.OnSelected = func(id widget.ListItemID) {
+		selectedRuleIndex = id
+	}
+	ruleList.OnUnselected = func(id widget.ListItemID) {
+		if selectedRuleIndex == id { // Clear selection only if it was the one unselected
+			selectedRuleIndex = -1
+		}
+	}
+
+	addRuleButton := widget.NewButton("Add Rule", func() {
+		matchEntry := widget.NewEntry()
+		matchEntry.SetPlaceHolder("*.jpg, *.png")
+		targetEntry := widget.NewEntry()
+		targetEntry.SetPlaceHolder("Images")
+
+		formItems := []*widget.FormItem{
+			widget.NewFormItem("Match Pattern", matchEntry),
+			widget.NewFormItem("Target Directory", targetEntry),
+		}
+
+		dialog.ShowForm("Add New Rule", "Add", "Cancel", formItems, func(confirmed bool) {
+			if !confirmed {
+				return
+			}
+			match := matchEntry.Text
+			target := targetEntry.Text
+			if match == "" || target == "" {
+				a.ShowError("Invalid Rule", fmt.Errorf("match pattern and target directory cannot be empty"))
+				return
+			}
+			newPattern := types.Pattern{Match: match, Target: target}
+			a.cfg.Organize.Patterns = append(a.cfg.Organize.Patterns, newPattern)
+			ruleList.Refresh() // Refresh the list to show the new rule
+			// Deselect after adding? Optional.
+			// ruleList.UnselectAll()
+			// selectedRuleIndex = -1
+		}, a.mainWindow)
+	})
+
+	removeRuleButton := widget.NewButton("Remove Selected Rule", func() {
+		if selectedRuleIndex < 0 || selectedRuleIndex >= len(a.cfg.Organize.Patterns) {
+			a.ShowInfo("Please select a rule to remove.")
+			return
+		}
+		// Remove the element at selectedRuleIndex
+		a.cfg.Organize.Patterns = append(a.cfg.Organize.Patterns[:selectedRuleIndex], a.cfg.Organize.Patterns[selectedRuleIndex+1:]...)
+		selectedRuleIndex = -1 // Reset selection
+		ruleList.UnselectAll() // Visually clear selection
+		ruleList.Refresh()     // Refresh the list
+	})
+
+	ruleButtons := container.NewHBox(layout.NewSpacer(), addRuleButton, removeRuleButton)
+
+	rulesCard := widget.NewCard("Organization Rules", "Define patterns to match filenames and their target directories.",
+		container.NewBorder(nil, ruleButtons, nil, nil, ruleList), // List in center, buttons below
+	)
+
+	// --- Save Button ---
 	saveButton := widget.NewButton("Save Settings", func() {
 		a.saveConfig()
 	})
 
+	// --- Final Layout for Settings Tab ---
 	return container.NewVBox(
-		widget.NewCard("General Settings", "", container.NewVBox(
-			dryRunCheck,
-			createDirsCheck,
-			backupCheck,
-			improvedCatCheck,
-			container.NewHBox(collisionLabel, collisionSelect),
-			container.NewHBox(defaultDirLabel, defaultDirEntry),
-		)),
-		layout.NewSpacer(),
+		generalSettingsCard,
+		rulesCard,
+		layout.NewSpacer(), // Push save button down
 		container.NewHBox(
-			layout.NewSpacer(),
+			layout.NewSpacer(), // Push save button right
 			saveButton,
 		),
 	)
@@ -668,4 +669,142 @@ func (a *App) findPathLabels(obj fyne.CanvasObject) []fyne.CanvasObject {
 	}
 
 	return labels
+}
+
+// createOrganizeTab creates the organize tab content
+func (a *App) createOrganizeTab() fyne.CanvasObject {
+	// Watch Mode Controls
+	watchStatusLabel := canvas.NewText("Watch Mode: Checking...", color.White)
+	watchStatusLabel.TextSize = 12
+
+	// Define buttons first, then assign callbacks to resolve scope issue
+	var startButton *widget.Button
+	var stopButton *widget.Button
+
+	startButton = widget.NewButton("Start Watch", nil) // Callback assigned below
+	stopButton = widget.NewButton("Stop Watch", nil)   // Callback assigned below
+
+	startButton.OnTapped = func() {
+		a.startWatchMode()
+		a.updateWatchStatus(watchStatusLabel)
+		a.updateWatchButtons(startButton, stopButton)
+	}
+
+	stopButton.OnTapped = func() {
+		a.stopWatchMode()
+		a.updateWatchStatus(watchStatusLabel)
+		a.updateWatchButtons(startButton, stopButton)
+	}
+
+	// Initial update of status and button states
+	a.updateWatchStatus(watchStatusLabel)
+	a.updateWatchButtons(startButton, stopButton)
+
+	watchControls := container.NewVBox(
+		widget.NewLabelWithStyle("Watch Mode", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		watchStatusLabel,
+		container.NewGridWithColumns(2, startButton, stopButton),
+	)
+
+	// Manual Organize Controls
+	dirEntry := widget.NewEntry()
+	dirEntry.SetText(a.cfg.Directories.Default) // Start with default
+	dirEntry.OnChanged = func(text string) {
+		// Maybe validate path here?
+	}
+
+	browseButton := widget.NewButton("Browse...", func() {
+		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
+			if err == nil && uri != nil {
+				dirEntry.SetText(uri.Path())
+			}
+		}, a.mainWindow)
+	})
+
+	dryRunCheck := widget.NewCheck("Dry Run (Simulate)", func(checked bool) {
+		// Only update the config state here, don't save immediately
+		a.cfg.Settings.DryRun = checked
+		// a.saveConfig() // Removed immediate save
+	})
+	dryRunCheck.SetChecked(a.cfg.Settings.DryRun)
+
+	organizeButton := widget.NewButton("Organize Now", func() {
+		targetDir := dirEntry.Text
+		if targetDir == "" {
+			a.ShowError("No directory specified", fmt.Errorf("please enter or browse for a directory to organize"))
+			return
+		}
+		// Ensure engine uses current dry-run setting
+		a.organizeEngine.SetDryRun(a.cfg.Settings.DryRun)
+		results, err := a.organizeEngine.OrganizeDirectory(targetDir)
+		if err != nil {
+			a.ShowError("Organization Failed", err)
+		} else {
+			var movedCount, errorCount int
+			var errors []string
+			for _, res := range results {
+				if res.Error != nil {
+					errorCount++
+					errors = append(errors, fmt.Sprintf("%s: %v", filepath.Base(res.SourcePath), res.Error))
+				} else if res.Moved {
+					movedCount++
+				}
+			}
+			msg := fmt.Sprintf("Organization complete. %d files processed/moved.", movedCount)
+			if errorCount > 0 {
+				// Fix SA1006
+				errorMsg := fmt.Sprintf("Encountered %d errors:\\n%s", errorCount, strings.Join(errors, "\\n"))
+				msg += "\\n" + errorMsg
+				a.ShowError("Organization encountered errors", fmt.Errorf(strings.Join(errors, "\\n"))) // Show first error
+			} else {
+				a.ShowInfo(msg)
+			}
+		}
+	})
+	organizeButton.Importance = widget.HighImportance
+
+	manualControls := container.NewVBox(
+		widget.NewLabelWithStyle("Manual Organization", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewBorder(nil, nil, nil, browseButton, dirEntry),
+		dryRunCheck,
+		organizeButton,
+	)
+
+	// Preset Rules
+	presetLabel := widget.NewLabelWithStyle("Add Preset Rules", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	presetButtons := container.NewGridWithColumns(3,
+		widget.NewButton("Images", func() { a.applyPresetRule("Images") }),
+		widget.NewButton("Documents", func() { a.applyPresetRule("Documents") }),
+		widget.NewButton("Videos", func() { a.applyPresetRule("Videos") }),
+		widget.NewButton("Audio", func() { a.applyPresetRule("Audio") }),
+		widget.NewButton("Archives", func() { a.applyPresetRule("Archives") }),
+	)
+	presetSection := container.NewVBox(presetLabel, presetButtons)
+
+	// Command Input (Simple version)
+	commandLabel := widget.NewLabelWithStyle("Command Input (Experimental)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	commandEntry := widget.NewEntry()
+	commandEntry.SetPlaceHolder("e.g., 'organize downloads', 'start watch'")
+	commandButton := widget.NewButton("Run Command", func() {
+		a.handleNaturalLanguageCommand(commandEntry.Text)
+	})
+	commandSection := container.NewVBox(commandLabel, commandEntry, commandButton)
+
+	// Layout the Organize Tab
+	return container.NewBorder(
+		nil, // Top
+		nil, // Bottom
+		nil, // Left
+		nil, // Right
+		container.NewVBox(
+			watchControls,
+			widget.NewSeparator(),
+			manualControls,
+			widget.NewSeparator(),
+			presetSection,
+			widget.NewSeparator(),
+			commandSection,
+			layout.NewSpacer(), // Push content up
+		),
+	)
 }

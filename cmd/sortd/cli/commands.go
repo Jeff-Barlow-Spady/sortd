@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sortd/internal/config"
 	"sortd/internal/organize"
@@ -312,24 +313,16 @@ var WatchCmd = &cobra.Command{
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
 		requireConfirm, _ := cmd.Flags().GetBool("confirm")
 
-		// Print header
-		PrintHeader("👁️ Watch Mode")
+		// Get watch directories from arguments
+		watchDirs := args
 
-		// Get directories to watch
-		var watchDirs []string
-		if len(args) > 0 {
-			watchDirs = args
-		} else if len(cfg.Directories.Watch) > 0 {
-			watchDirs = cfg.Directories.Watch
-		} else if HasGum() {
-			// Ask user to select directories
-			watchDir := RunGumFile("--directory")
-			if watchDir != "" {
-				watchDirs = append(watchDirs, watchDir)
-			}
+		// Validate configuration
+		if cfg == nil {
+			PrintError("Configuration not loaded")
+			os.Exit(1)
 		}
 
-		// Validate directories
+		// Validate watch directories
 		if len(watchDirs) == 0 {
 			PrintError("No directories specified to watch")
 			PrintInfo("Specify directories as arguments or in your config file")
@@ -337,74 +330,41 @@ var WatchCmd = &cobra.Command{
 		}
 
 		// Create the daemon
-		daemon := watch.NewDaemon(cfg)
+		daemon, err := watch.NewDaemon(cfg)
+		if err != nil {
+			PrintError(fmt.Sprintf("Failed to create daemon: %v", err))
+			os.Exit(1)
+		}
 
 		// Set dry run mode if specified
 		daemon.SetDryRun(dryRun)
+
+		// Set confirmation requirement if specified
 		daemon.SetRequireConfirmation(requireConfirm)
-
-		// Set up our callback for file events
-		daemon.SetCallback(func(sourcePath, destPath string, err error) {
-			// If err is nil and we require confirmation, this is a confirmation request
-			if err == nil && requireConfirm {
-				// Ask user to confirm this move
-				relSource, _ := filepath.Rel(filepath.Dir(sourcePath), sourcePath)
-				relDest, _ := filepath.Rel(filepath.Dir(destPath), destPath)
-
-				message := fmt.Sprintf("Move %s to %s?", relSource, relDest)
-				if !RunGumConfirm(message) {
-					// User declined, skip this file
-					PrintInfo(fmt.Sprintf("Skipped: %s", sourcePath))
-					return
-				}
-
-				// User confirmed, perform the move
-				destPath, moveErr := daemon.OrganizeFile(sourcePath)
-				if moveErr != nil {
-					PrintError(fmt.Sprintf("Error organizing %s: %v", sourcePath, moveErr))
-				} else {
-					PrintSuccess(fmt.Sprintf("Organized: %s -> %s", sourcePath, destPath))
-				}
-				return
-			}
-
-			// Normal completion callback
-			if err != nil {
-				PrintError(fmt.Sprintf("Error organizing %s: %v", sourcePath, err))
-			} else {
-				PrintSuccess(fmt.Sprintf("Organized: %s -> %s", sourcePath, destPath))
-			}
-		})
 
 		// Add watch directories
 		for _, dir := range watchDirs {
 			if err := daemon.AddWatchDirectory(dir); err != nil {
-				PrintError(fmt.Sprintf("Error adding directory %s: %v", dir, err))
-			} else {
-				PrintInfo(fmt.Sprintf("Watching: %s", dir))
+				PrintError(fmt.Sprintf("Failed to add watch directory %s: %v", dir, err))
+				os.Exit(1)
 			}
 		}
 
-		// Display watch information
-		watchInfo := fmt.Sprintf("Watching %d directories", len(watchDirs))
-		if dryRun {
-			watchInfo += " (dry run mode)"
-		}
-		if requireConfirm {
-			watchInfo += " (confirmation required)"
-		}
-		PrintInfo(watchInfo)
-
 		// Start the daemon
 		if err := daemon.Start(); err != nil {
-			PrintError(fmt.Sprintf("Error starting watch mode: %v", err))
+			PrintError(fmt.Sprintf("Failed to start daemon: %v", err))
 			os.Exit(1)
 		}
 
 		PrintInfo("Press Ctrl+C to stop watching")
 
 		// Keep the process alive
-		select {}
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, os.Interrupt)
+		<-ch
+
+		// Stop the daemon
+		daemon.Stop()
 	},
 }
 

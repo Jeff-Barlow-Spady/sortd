@@ -8,6 +8,7 @@ import (
 	"sortd/internal/analysis"
 	"sortd/internal/organize"
 	"sortd/internal/tui"
+	"sortd/internal/watch"
 
 	"sortd/internal/config"
 	"sortd/internal/gui"
@@ -16,6 +17,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -44,6 +46,7 @@ func main() {
 	rootCmd.AddCommand(tuiCmd())
 	rootCmd.AddCommand(guiCmd())
 	rootCmd.AddCommand(watchCmd())
+	rootCmd.AddCommand(daemonCmd) // Add daemon control commands
 
 	// Execute the command
 	if err := rootCmd.Execute(); err != nil {
@@ -280,52 +283,120 @@ func tuiCmd() *cobra.Command {
 
 // watchCmd creates a command for watch mode
 func watchCmd() *cobra.Command {
-	var (
-		dir        string
-		interval   int
-		background bool
-	)
+	var background bool // Keep background flag for now
 
 	cmd := &cobra.Command{
 		Use:   "watch",
-		Short: "Watch directory for changes and organize automatically",
-		Long:  `Watch the specified directory for new files and organize them automatically based on patterns.`,
+		Short: "Watch configured directories for changes and organize automatically",
+		Long: `Watch directories specified in the configuration for new or modified files
+and organize them automatically based on defined rules and patterns.`,
 		Run: func(cmd *cobra.Command, args []string) {
-			// Set default directory if none provided
-			if dir == "" {
-				var err error
-				dir, err = os.Getwd()
-				if err != nil {
-					fmt.Printf("Error getting current directory: %v\n", err)
+			// Load configuration
+			cfg, err := config.LoadConfig()
+			if err != nil {
+				fmt.Printf("Error loading config: %v. Using default settings.\n", err)
+				cfg = config.New()
+				// Ensure some watch directories exist, maybe default to Downloads?
+				// For now, let's just warn if none are configured.
+				if len(cfg.WatchDirectories) == 0 {
+					fmt.Println("Warning: No watch directories configured. Exiting.")
 					os.Exit(1)
 				}
+			} else if len(cfg.WatchDirectories) == 0 {
+				fmt.Println("No watch directories specified in the configuration. Nothing to watch.")
+				fmt.Println("Please add directories to the 'watch_directories' section of your config file.")
+				os.Exit(0)
 			}
 
-			fmt.Printf("Watching directory: %s (interval: %d seconds)\n", dir, interval)
+			// Create the watch daemon - Pass only config, returns (*Daemon, error)
+			_, err = watch.NewDaemon(cfg)
+			if err != nil {
+				log.Errorf("Failed to create watch daemon: %v", err)
+				return
+			}
 
+			// Handle background mode (basic implementation)
 			if background {
-				fmt.Println("Running in background mode")
-				// Here we'd daemonize the process for background watching
-				// For now, just simulate with a simple message
-				fmt.Println("Background mode simulation - would fork to background here")
-			} else {
-				// Run watch mode in foreground
-				fmt.Println("Running in foreground mode. Press Ctrl+C to stop.")
-				// Here we'd implement an actual watch loop
-				fmt.Println("Watch mode simulation - would start watching now")
+				fmt.Println("Starting watch daemon in background...")
+				if err := watch.DaemonControl(cfg, false); err != nil {
+					log.Errorf("Failed to start daemon in background: %v", err)
+					return
+				}
+				fmt.Println("Daemon started. Logs will be written to sortd.log")
+				fmt.Println("Use 'sortd daemon stop' to stop the daemon")
+				return // Exit after starting the daemon
+			}
 
-				// Block to simulate running
-				fmt.Println("Press Ctrl+C to exit...")
-				// Block indefinitely
-				select {}
+			// Run watch mode in foreground
+			fmt.Println("Starting watch daemon in foreground. Press Ctrl+C to stop.")
+			fmt.Printf("Watching directories: %v\n", cfg.WatchDirectories)
+
+			// Start the daemon in foreground mode
+			if err := watch.DaemonControl(cfg, true); err != nil {
+				log.Errorf("Failed to start daemon in foreground: %v", err)
+				return
 			}
 		},
 	}
 
-	// Add watch mode flags
-	cmd.Flags().StringVarP(&dir, "dir", "d", "", "Directory to watch (default is current directory)")
-	cmd.Flags().IntVarP(&interval, "interval", "i", 300, "Watch interval in seconds (default 300)")
-	cmd.Flags().BoolVarP(&background, "background", "b", false, "Run in background mode")
+	// Remove old flags
+	// cmd.Flags().StringVarP(&dir, "dir", "d", "", "Directory to watch (default is current directory)") // Removed
+	// cmd.Flags().IntVarP(&interval, "interval", "i", 300, "Watch interval in seconds (default 300)") // Removed
+
+	// Keep background flag for now, although true daemonization is needed later
+	cmd.Flags().BoolVarP(&background, "background", "b", false, "Run in background mode (basic implementation)")
 
 	return cmd
+}
+
+// Add daemon control commands
+var daemonCmd = &cobra.Command{
+	Use:   "daemon",
+	Short: "Control the watch daemon",
+	Long:  `Control the background watch daemon process.`,
+}
+
+var daemonStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show daemon status",
+	Run: func(cmd *cobra.Command, args []string) {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			log.Errorf("Failed to load config: %v", err)
+			return
+		}
+		status, err := watch.Status(cfg)
+		if err != nil {
+			log.Error("Failed to get daemon status: %v", err)
+			return
+		}
+
+		fmt.Printf("Daemon Status:\n")
+		fmt.Printf("  Running: %v\n", status.Running)
+		fmt.Printf("  Watch Directories: %v\n", status.WatchDirectories)
+		fmt.Printf("  Last Activity: %v\n", status.LastActivity)
+		fmt.Printf("  Files Processed: %d\n", status.FilesProcessed)
+	},
+}
+
+var daemonStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop the running daemon",
+	Run: func(cmd *cobra.Command, args []string) {
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			log.Errorf("Failed to load config: %v", err)
+			return
+		}
+		if err := watch.StopDaemon(cfg); err != nil {
+			log.Error("Failed to stop daemon: %v", err)
+			return
+		}
+		fmt.Println("Daemon stopped successfully")
+	},
+}
+
+func init() {
+	daemonCmd.AddCommand(daemonStatusCmd)
+	daemonCmd.AddCommand(daemonStopCmd)
 }

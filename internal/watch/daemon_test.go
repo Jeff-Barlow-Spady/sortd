@@ -14,6 +14,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNewDaemon(t *testing.T) {
+	cfg := &config.Config{
+		WatchDirectories: []string{"/tmp/test"},
+		Settings: config.Settings{
+			DryRun: false,
+		},
+	}
+
+	daemon, err := watch.NewDaemon(cfg)
+	if err != nil {
+		t.Errorf("NewDaemon failed: %v", err)
+	}
+
+	if daemon == nil {
+		t.Error("NewDaemon returned nil daemon")
+	}
+}
+
 func TestDaemon_BasicFileMove(t *testing.T) {
 	// 1. Setup temporary directories
 	tmpDir := t.TempDir()
@@ -32,7 +50,9 @@ func TestDaemon_BasicFileMove(t *testing.T) {
 	cfg.Settings.DryRun = false     // Ensure files are actually moved
 
 	// 3. Initialize Daemon
-	daemon := watch.NewDaemon(cfg)
+	daemon, err := watch.NewDaemon(cfg)
+	require.NoError(t, err, "NewDaemon should not return an error")
+	require.NotNil(t, daemon, "NewDaemon should not return a nil daemon")
 
 	// Optional: Setup a callback for debugging or finer-grained assertions
 	// movedChan := make(chan string, 1)
@@ -43,7 +63,7 @@ func TestDaemon_BasicFileMove(t *testing.T) {
 	// })
 
 	// 4. Start Daemon
-	err := daemon.Start()
+	err = daemon.Start()
 	require.NoError(t, err, "Daemon should start without error")
 	defer daemon.Stop() // Ensure daemon is stopped even on test failure
 

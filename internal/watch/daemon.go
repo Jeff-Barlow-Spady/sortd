@@ -13,12 +13,12 @@ import (
 	"sortd/internal/organize"
 )
 
-// DaemonStatus represents the current status of the daemon
+// DaemonStatus represents the status of the watch daemon
 type DaemonStatus struct {
-	Running          bool      // Whether the daemon is currently active
-	WatchDirectories []string  // Directories being watched
-	LastActivity     time.Time // Time of last file activity
-	FilesProcessed   int       // Total files processed
+	Running          bool
+	WatchDirectories []string
+	LastActivity     time.Time
+	FilesProcessed   int
 }
 
 // Daemon manages a background file organization service
@@ -50,12 +50,12 @@ type Daemon struct {
 }
 
 // NewDaemon creates a new background file organization service
-func NewDaemon(cfg *config.Config) *Daemon {
+func NewDaemon(cfg *config.Config) (*Daemon, error) {
 	// Create a watcher using fsnotify
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Errorf("Failed to create fsnotify watcher for daemon: %v", err)
-		os.Exit(1) // Exit as log.Fatalf would
+		// Return the error instead of logging and exiting here
+		return nil, fmt.Errorf("failed to create fsnotify watcher: %w", err)
 	}
 
 	// Create the organization engine using the correct constructor
@@ -70,7 +70,7 @@ func NewDaemon(cfg *config.Config) *Daemon {
 		callback:            nil,
 		requireConfirmation: false,
 		running:             false,
-	}
+	}, nil // Return nil error on success
 }
 
 // Start initiates the daemon process

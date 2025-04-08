@@ -18,6 +18,7 @@ func NewWatchCmd() *cobra.Command {
 		requireConfirm  bool
 		confirmInterval int
 		foreground      bool
+		background      bool
 	)
 
 	cmd := &cobra.Command{
@@ -43,8 +44,12 @@ func NewWatchCmd() *cobra.Command {
 				fmt.Printf("  - %s\n", dir)
 			}
 
-			// 2. Create and configure the daemon (AFTER loading config)
-			daemon := watch.NewDaemon(cfg)
+			// Create the watch daemon - Pass only config, returns (*Daemon, error)
+			daemon, err := watch.NewDaemon(cfg)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 
 			// Set confirmation requirement
 			daemon.SetRequireConfirmation(requireConfirm)
@@ -88,13 +93,27 @@ func NewWatchCmd() *cobra.Command {
 				})
 			}
 
-			// 3. Start the daemon
-			if err := daemon.Start(); err != nil {
-				fmt.Println(errorText(fmt.Sprintf("Failed to start watch daemon: %v", err)))
-				return
+			// Handle background mode
+			if background {
+				fmt.Println("Starting watch daemon in background...")
+				if err := watch.DaemonControl(cfg, true); err != nil {
+					fmt.Printf("Error: %v\n", err)
+					return
+				}
+				fmt.Println("Daemon started. Logs will be written to sortd.log")
+				fmt.Println("Use 'sortd daemon stop' to stop the daemon")
+				return // Exit after starting the daemon
 			}
 
-			fmt.Println(successText("Watch daemon started"))
+			// Run watch mode in foreground
+			fmt.Println("Starting watch daemon in foreground. Press Ctrl+C to stop.")
+			fmt.Printf("Watching directories: %v\n", cfg.WatchDirectories)
+
+			// Start the daemon in foreground mode
+			if err := watch.DaemonControl(cfg, false); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 
 			// 4. Handle foreground/background
 			if foreground {
@@ -118,6 +137,7 @@ func NewWatchCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&requireConfirm, "require-confirmation", "c", false, "Require confirmation for file operations")
 	cmd.Flags().IntVar(&confirmInterval, "confirmation-period", 60, "Period in seconds for batch confirmations")
 	cmd.Flags().BoolVarP(&foreground, "foreground", "f", false, "Run in foreground (don't daemonize)")
+	cmd.Flags().BoolVarP(&background, "background", "b", false, "Run in background (daemonize)")
 
 	return cmd
 }

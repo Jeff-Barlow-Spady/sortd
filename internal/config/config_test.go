@@ -37,12 +37,11 @@ organize:
 settings:
   dry_run: false
   create_dirs: true
+  backup: true
   collision: "rename"
-watch_mode:
-  enabled: true
-watch_directories:
-  - /home/user/downloads
-  - /mnt/data/staging
+directories:
+  default: "/home/test"
+  watch: ["/home/test/docs", "/home/test/images"]
 `
 	invalidSyntaxYAML = `
 organize:
@@ -76,9 +75,12 @@ func TestLoadConfigFile(t *testing.T) {
 		assert.Equal(t, "*.jpg", cfg.Organize.Patterns[0].Match)
 		assert.Equal(t, "/path/to/images", cfg.Organize.Patterns[0].Target)
 		assert.Equal(t, "rename", cfg.Settings.Collision)
-		assert.Len(t, cfg.WatchDirectories, 2)
-		assert.Contains(t, cfg.WatchDirectories, "/home/user/downloads")
-		assert.Contains(t, cfg.WatchDirectories, "/mnt/data/staging")
+		assert.Equal(t, "/home/test", cfg.Directories.Default)
+		assert.Equal(t, "/home/test/docs", cfg.Directories.Watch[0])
+		assert.Equal(t, "/home/test/images", cfg.Directories.Watch[1])
+		assert.Equal(t, false, cfg.Settings.DryRun)
+		assert.Equal(t, true, cfg.Settings.CreateDirs)
+		assert.Equal(t, true, cfg.Settings.Backup)
 	})
 
 	t.Run("load non-existent file", func(t *testing.T) {
@@ -93,7 +95,7 @@ func TestLoadConfigFile(t *testing.T) {
 		assert.Equal(t, defaultCfg.Settings.DryRun, cfg.Settings.DryRun)
 		assert.Equal(t, defaultCfg.Settings.Collision, cfg.Settings.Collision)
 		assert.Equal(t, defaultCfg.Organize.Patterns, cfg.Organize.Patterns)
-		assert.Equal(t, defaultCfg.WatchMode.Enabled, cfg.WatchMode.Enabled)
+		assert.Equal(t, defaultCfg.Directories.Default, cfg.Directories.Default)
 	})
 
 	t.Run("load file with invalid YAML syntax", func(t *testing.T) {
@@ -139,37 +141,43 @@ func TestConfigValidation(t *testing.T) {
 				}{
 					Patterns: []types.Pattern{{Match: "*", Target: "/dest"}},
 				},
-				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
-				}{
-					Collision: "overwrite",
-					Backup:    false,
+				Settings: config.Settings{
+					DryRun:     false,
+					CreateDirs: true,
+					Backup:     false,
+					Collision:  "overwrite",
 				},
-				WatchDirectories: []string{"/watch/dir"},
+				Directories: struct {
+					Default string   `yaml:"default"`
+					Watch   []string `yaml:"watch"`
+				}{
+					Default: "/home/test",
+					Watch:   []string{"/home/test/docs", "/home/test/images"},
+				},
 			},
 			wantErr: false,
 		},
 		{
 			name: "invalid collision",
 			config: &config.Config{
-				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
-				}{
-					Collision: "invalid_strategy",
-					Backup:    false,
+				Settings: config.Settings{
+					DryRun:     false,
+					CreateDirs: true,
+					Backup:     false,
+					Collision:  "invalid_strategy",
 				},
 				Organize: struct {
 					Patterns []types.Pattern `yaml:"patterns"`
 				}{
 					Patterns: []types.Pattern{{Match: "*", Target: "/dest"}},
 				},
-				WatchDirectories: []string{"/watch/dir"},
+				Directories: struct {
+					Default string   `yaml:"default"`
+					Watch   []string `yaml:"watch"`
+				}{
+					Default: "/home/test",
+					Watch:   []string{"/home/test/docs", "/home/test/images"},
+				},
 			},
 			wantErr: true,
 		},
@@ -181,16 +189,19 @@ func TestConfigValidation(t *testing.T) {
 				}{
 					Patterns: []types.Pattern{{Match: " ", Target: "/dest"}},
 				},
-				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
-				}{
-					Collision: "skip",
-					Backup:    false,
+				Settings: config.Settings{
+					DryRun:     false,
+					CreateDirs: true,
+					Backup:     false,
+					Collision:  "skip",
 				},
-				WatchDirectories: []string{"/watch/dir"},
+				Directories: struct {
+					Default string   `yaml:"default"`
+					Watch   []string `yaml:"watch"`
+				}{
+					Default: "/home/test",
+					Watch:   []string{"/home/test/docs", "/home/test/images"},
+				},
 			},
 			wantErr: true,
 		},
@@ -202,16 +213,19 @@ func TestConfigValidation(t *testing.T) {
 				}{
 					Patterns: []types.Pattern{{Match: "*.txt", Target: " "}},
 				},
-				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
-				}{
-					Collision: "rename",
-					Backup:    false,
+				Settings: config.Settings{
+					DryRun:     false,
+					CreateDirs: true,
+					Backup:     false,
+					Collision:  "rename",
 				},
-				WatchDirectories: []string{"/watch/dir"},
+				Directories: struct {
+					Default string   `yaml:"default"`
+					Watch   []string `yaml:"watch"`
+				}{
+					Default: "/home/test",
+					Watch:   []string{"/home/test/docs", "/home/test/images"},
+				},
 			},
 			wantErr: true,
 		},
@@ -223,16 +237,19 @@ func TestConfigValidation(t *testing.T) {
 				}{
 					Patterns: []types.Pattern{{Match: "*", Target: "/dest"}},
 				},
-				Settings: struct {
-					DryRun     bool   `yaml:"dry_run"`
-					CreateDirs bool   `yaml:"create_dirs"`
-					Backup     bool   `yaml:"backup"`
-					Collision  string `yaml:"collision"`
-				}{
-					Collision: "rename",
-					Backup:    false,
+				Settings: config.Settings{
+					DryRun:     false,
+					CreateDirs: true,
+					Backup:     false,
+					Collision:  "rename",
 				},
-				WatchDirectories: []string{""},
+				Directories: struct {
+					Default string   `yaml:"default"`
+					Watch   []string `yaml:"watch"`
+				}{
+					Default: "/home/test",
+					Watch:   []string{""},
+				},
 			},
 			wantErr: true,
 		},
