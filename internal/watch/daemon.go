@@ -3,6 +3,7 @@ package watch
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"sortd/internal/config"
 	"sortd/internal/organize"
+	"sortd/pkg/workflow"
 )
 
 // DaemonStatus represents the status of the watch daemon
@@ -31,6 +33,9 @@ type Daemon struct {
 
 	// Organize engine adapter
 	engine *organize.Engine
+
+	// Workflow manager for advanced file processing
+	workflowManager *workflow.Manager
 
 	// Statistics
 	processed    int
@@ -61,10 +66,33 @@ func NewDaemon(cfg *config.Config) (*Daemon, error) {
 	// Create the organization engine using the correct constructor
 	engine := organize.NewWithConfig(cfg)
 
+	// Initialize the workflow manager
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user home directory: %w", err)
+	}
+
+	// Use a fixed path under the .config/sortd directory for workflows
+	workflowsDir := filepath.Join(home, ".config", "sortd", "workflows")
+
+	// Create workflows directory if it doesn't exist
+	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create workflows directory: %w", err)
+	}
+
+	// Initialize workflow manager
+	workflowManager, err := workflow.NewManager(workflowsDir)
+	if err != nil {
+		log.Warnf("Failed to initialize workflow manager: %v", err)
+		// Continue without workflow manager - don't fail the daemon initialization
+		workflowManager = nil
+	}
+
 	return &Daemon{
 		config:              cfg,
 		watcher:             watcher,
 		engine:              engine,
+		workflowManager:     workflowManager,
 		processed:           0,
 		lastActivity:        time.Now(), // Initialize lastActivity
 		callback:            nil,
@@ -103,8 +131,16 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("no valid directories to watch")
 	}
 
-	// fsnotify doesn't need an explicit Start(), it starts listening on NewWatcher()
-	// Remove the invalid EnableRenames call
+	// Also start the workflow manager watcher if available
+	if d.workflowManager != nil {
+		// Start the workflow manager's watcher for the same directories
+		if err := d.workflowManager.StartWatcher(d.watcher.WatchList()); err != nil {
+			log.Warnf("Failed to start workflow manager watcher: %v", err)
+			// Don't fail the whole daemon if just the workflow manager fails
+		} else {
+			log.Info("Workflow manager watcher started successfully")
+		}
+	}
 
 	// Start processing file events
 	go d.processEvents()
@@ -121,6 +157,12 @@ func (d *Daemon) Stop() {
 		return
 	}
 
+	// Stop the workflow manager watcher if it was started
+	if d.workflowManager != nil {
+		d.workflowManager.StopWatcher()
+		log.Info("Workflow manager watcher stopped.")
+	}
+
 	// Stop the watcher
 	if err := d.watcher.Close(); err != nil {
 		log.Errorf("Error closing watcher: %v", err)
@@ -134,10 +176,24 @@ func (d *Daemon) AddWatchDirectory(dir string) error {
 	err := d.watcher.Add(dir)
 	if err != nil {
 		log.Errorf("Error adding watch directory dynamically %s: %v", dir, err)
-	} else {
-		log.Infof("Dynamically added watch directory: %s", dir)
+		return err
 	}
-	return err
+
+	log.Infof("Dynamically added watch directory: %s", dir)
+
+	// Also add to the workflow manager if available
+	if d.workflowManager != nil {
+		// Add the same directory to the workflow manager's watcher
+		// We use a slice for consistency with the StartWatcher method
+		if err := d.workflowManager.StartWatcher([]string{dir}); err != nil {
+			log.Warnf("Failed to add directory to workflow manager watcher: %v", err)
+			// Don't fail the whole operation if just the workflow manager update fails
+		} else {
+			log.Info("Directory added to workflow manager watcher")
+		}
+	}
+
+	return nil
 }
 
 // SetCallback sets a function to be called when a file is processed
@@ -156,6 +212,11 @@ func (d *Daemon) SetRequireConfirmation(require bool) {
 // SetDryRun sets whether to run in dry run mode
 func (d *Daemon) SetDryRun(dryRun bool) {
 	d.engine.SetDryRun(dryRun)
+
+	// Also set dry run mode for workflow manager if available
+	if d.workflowManager != nil {
+		d.workflowManager.SetDryRun(dryRun)
+	}
 }
 
 // Status returns the current status of the daemon
@@ -164,7 +225,7 @@ func (d *Daemon) Status() DaemonStatus {
 	defer d.mutex.RUnlock()
 
 	return DaemonStatus{
-		Running:          d.running,
+		Running: d.running,
 		// Use WatchList() for fsnotify
 		WatchDirectories: d.watcher.WatchList(),
 		LastActivity:     d.lastActivity,
@@ -206,9 +267,12 @@ func (d *Daemon) processEvents() {
 				d.lastActivity = time.Now()
 				d.mutex.Unlock()
 
-				// Process the file
+				// Process the file using the traditional engine
 				log.Debugf("Processing file event for: %s", event.Name)
 				d.organizeFile(event.Name)
+
+				// NOTE: We no longer need to forward events manually to the workflow manager
+				// because it has its own watcher running via StartWatcher()
 			}
 
 		case err, ok := <-d.watcher.Errors:
@@ -282,4 +346,42 @@ func (d *Daemon) OrganizeFile(filePath string) (string, error) {
 	// We don't know the destination path easily from OrganizeByPatterns.
 	// Return empty string for path and nil for error on success.
 	return "", nil
+}
+
+// NewDaemonWithWorkflowPath creates a new daemon with a custom workflow directory path
+// This is primarily used for testing purposes
+func NewDaemonWithWorkflowPath(cfg *config.Config, workflowPath string) (*Daemon, error) {
+	// Create a watcher using fsnotify
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create fsnotify watcher: %w", err)
+	}
+
+	// Create the organization engine using the correct constructor
+	engine := organize.NewWithConfig(cfg)
+
+	// Create workflows directory if it doesn't exist
+	if err := os.MkdirAll(workflowPath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create workflows directory: %w", err)
+	}
+
+	// Initialize workflow manager with the specified path
+	workflowManager, err := workflow.NewManager(workflowPath)
+	if err != nil {
+		log.Warnf("Failed to initialize workflow manager: %v", err)
+		// Continue without workflow manager - don't fail the daemon initialization
+		workflowManager = nil
+	}
+
+	return &Daemon{
+		config:              cfg,
+		watcher:             watcher,
+		engine:              engine,
+		workflowManager:     workflowManager,
+		processed:           0,
+		lastActivity:        time.Now(),
+		callback:            nil,
+		requireConfirmation: false,
+		running:             false,
+	}, nil
 }

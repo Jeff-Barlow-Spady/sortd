@@ -47,7 +47,7 @@ func TestDaemon_BasicFileMove(t *testing.T) {
 		{Match: "*.txt", Target: destDir},
 	}
 	cfg.Settings.CreateDirs = true // Important for the test
-	cfg.Settings.DryRun = false     // Ensure files are actually moved
+	cfg.Settings.DryRun = false    // Ensure files are actually moved
 
 	// 3. Initialize Daemon
 	daemon, err := watch.NewDaemon(cfg)
@@ -97,4 +97,94 @@ func TestDaemon_BasicFileMove(t *testing.T) {
 	// }
 
 	// 8. Stop is handled by defer
+}
+
+func TestDaemon_WorkflowIntegration(t *testing.T) {
+	// 1. Setup temporary directories
+	tmpDir := t.TempDir()
+	watchDir := filepath.Join(tmpDir, "watchdir")
+	destDir := filepath.Join(tmpDir, "destdir")
+	workflowDestDir := filepath.Join(tmpDir, "workflow_dest")
+	workflowsDir := filepath.Join(tmpDir, "workflows")
+
+	// Create necessary directories
+	require.NoError(t, os.Mkdir(watchDir, 0755))
+	require.NoError(t, os.Mkdir(workflowsDir, 0755))
+
+	// 2. Create a test workflow file
+	workflowID := "test-workflow"
+	workflowContent := []byte(`
+id: "test-workflow"
+name: "Test Workflow"
+description: "Test workflow for integration testing"
+enabled: true
+priority: 10
+
+trigger:
+  type: "file_created"
+  pattern: "*.log"
+
+actions:
+  - type: "move"
+    target: "` + workflowDestDir + `"
+    options:
+      createTargetDir: "true"
+      overwrite: "false"
+`)
+
+	workflowPath := filepath.Join(workflowsDir, workflowID+".yaml")
+	require.NoError(t, os.WriteFile(workflowPath, workflowContent, 0644))
+
+	// 3. Create config with a pattern for txt files and point workflow dir to our temp dir
+	cfg := &config.Config{}
+	cfg.WatchDirectories = []string{watchDir}
+	cfg.Organize.Patterns = []types.Pattern{
+		{Match: "*.txt", Target: destDir},
+	}
+	cfg.Settings.CreateDirs = true
+	cfg.Settings.DryRun = false
+
+	// Set environment variables to override workflow directory (if your daemon checks for this)
+	origHome := os.Getenv("HOME")
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	os.Setenv("HOME", tmpDir)
+
+	// 4. Create a custom init function for testing - this is needed to override the config path
+	// We'll need to expose a testing helper in the daemon package
+	daemon, err := watch.NewDaemonWithWorkflowPath(cfg, workflowsDir)
+	require.NoError(t, err, "NewDaemonWithWorkflowPath should not return an error")
+	require.NotNil(t, daemon, "NewDaemonWithWorkflowPath should not return a nil daemon")
+
+	// 5. Start the daemon
+	err = daemon.Start()
+	require.NoError(t, err, "Daemon should start without error")
+	defer daemon.Stop()
+
+	// 6. Create two test files - one for each system
+	// This one for the organize engine pattern
+	txtFilePath := filepath.Join(watchDir, "test.txt")
+	require.NoError(t, os.WriteFile(txtFilePath, []byte("test content for txt"), 0644))
+
+	// This one for the workflow trigger
+	logFilePath := filepath.Join(watchDir, "test.log")
+	require.NoError(t, os.WriteFile(logFilePath, []byte("test content for log"), 0644))
+
+	// 7. Wait for processing
+	time.Sleep(500 * time.Millisecond)
+
+	// 8. Check results for organize engine
+	txtDestPath := filepath.Join(destDir, "test.txt")
+	_, err = os.Stat(txtFilePath)
+	assert.True(t, os.IsNotExist(err), "Original txt file should be moved")
+
+	_, err = os.Stat(txtDestPath)
+	assert.NoError(t, err, "Txt file should exist in destination")
+
+	// 9. Check results for workflow
+	logDestPath := filepath.Join(workflowDestDir, "test.log")
+	_, err = os.Stat(logFilePath)
+	assert.True(t, os.IsNotExist(err), "Original log file should be moved")
+
+	_, err = os.Stat(logDestPath)
+	assert.NoError(t, err, "Log file should exist in workflow destination")
 }

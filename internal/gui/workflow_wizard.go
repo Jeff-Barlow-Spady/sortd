@@ -2,11 +2,13 @@ package gui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"sortd/pkg/types"
+	"sortd/pkg/workflow"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -474,27 +476,48 @@ func (w *WorkflowWizard) createConditionsStep() fyne.CanvasObject {
 		}
 	})
 
-	return container.NewVBox(
-		title,
+	// Create a fixed height container for the list with scroll
+	listContainer := container.NewBorder(
 		widget.NewLabel("Existing Conditions:"),
-		container.NewBorder(nil, nil, nil, nil, conditionList),
-		widget.NewSeparator(),
-		widget.NewLabel("Add New Condition:"),
-		container.NewGridWithColumns(2,
-			widget.NewForm(
-				widget.NewFormItem("Condition Type", conditionTypeSelect),
-				widget.NewFormItem("Operator", operatorSelect),
+		nil,
+		nil,
+		nil,
+		container.NewVScroll(conditionList),
+	)
+
+	// Use a fixed height with VBox to ensure the list gets enough space
+	listWithHeight := container.NewVBox(
+		listContainer,
+		layout.NewSpacer(),
+	)
+
+	return container.NewBorder(
+		container.NewVBox(
+			title,
+			listWithHeight,
+		),
+		container.NewVBox(
+			widget.NewSeparator(),
+			widget.NewLabel("Add New Condition:"),
+			container.NewGridWithColumns(2,
+				widget.NewForm(
+					widget.NewFormItem("Condition Type", conditionTypeSelect),
+					widget.NewFormItem("Operator", operatorSelect),
+				),
+				widget.NewForm(
+					widget.NewFormItem("Value", valueEntry),
+					widget.NewFormItem("Unit", unitEntry),
+				),
 			),
-			widget.NewForm(
-				widget.NewFormItem("Value", valueEntry),
-				widget.NewFormItem("Unit", unitEntry),
+			container.NewHBox(
+				layout.NewSpacer(),
+				addButton,
+				removeButton,
 			),
 		),
-		container.NewHBox(
-			layout.NewSpacer(),
-			addButton,
-			removeButton,
-		),
+		nil,
+		nil,
+		nil,
 	)
 }
 
@@ -634,25 +657,46 @@ func (w *WorkflowWizard) createActionsStep() fyne.CanvasObject {
 		}
 	})
 
-	return container.NewVBox(
-		title,
+	// Create a fixed height container for the list with scroll
+	listContainer := container.NewBorder(
 		widget.NewLabel("Existing Actions:"),
-		container.NewBorder(nil, nil, nil, nil, actionList),
-		widget.NewSeparator(),
-		widget.NewLabel("Add New Action:"),
-		widget.NewForm(
-			widget.NewFormItem("Action Type", actionTypeSelect),
-			widget.NewFormItem("Target", container.NewBorder(nil, nil, nil, browseButton, targetEntry)),
+		nil,
+		nil,
+		nil,
+		container.NewVScroll(actionList),
+	)
+
+	// Use a fixed height with VBox to ensure the list gets enough space
+	listWithHeight := container.NewVBox(
+		listContainer,
+		layout.NewSpacer(),
+	)
+
+	return container.NewBorder(
+		container.NewVBox(
+			title,
+			listWithHeight,
 		),
 		container.NewVBox(
-			createDirCheck,
-			overwriteCheck,
+			widget.NewSeparator(),
+			widget.NewLabel("Add New Action:"),
+			widget.NewForm(
+				widget.NewFormItem("Action Type", actionTypeSelect),
+				widget.NewFormItem("Target", container.NewBorder(nil, nil, nil, browseButton, targetEntry)),
+			),
+			container.NewVBox(
+				createDirCheck,
+				overwriteCheck,
+			),
+			container.NewHBox(
+				layout.NewSpacer(),
+				addButton,
+				removeButton,
+			),
 		),
-		container.NewHBox(
-			layout.NewSpacer(),
-			addButton,
-			removeButton,
-		),
+		nil,
+		nil,
+		nil,
 	)
 }
 
@@ -701,18 +745,41 @@ func (w *WorkflowWizard) saveWorkflow() {
 		return
 	}
 
-	// Determine file name
+	// Get workflow directory from app config
+	home, err := os.UserHomeDir()
+	if err != nil {
+		w.app.ShowError("Error Saving Workflow", fmt.Errorf("failed to get home directory: %w", err))
+		return
+	}
+
+	configDir := filepath.Join(home, ".config", "sortd", "workflows")
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		w.app.ShowError("Error Saving Workflow", fmt.Errorf("failed to create workflows directory: %w", err))
+		return
+	}
+
+	// Create workflow manager
+	manager, err := workflow.NewManager(configDir)
+	if err != nil {
+		w.app.ShowError("Error Saving Workflow", fmt.Errorf("failed to initialize workflow manager: %w", err))
+		return
+	}
+
+	// Add workflow
+	if err := manager.AddWorkflow(w.workflowData); err != nil {
+		w.app.ShowError("Error Saving Workflow", fmt.Errorf("failed to save workflow: %w", err))
+		return
+	}
+
+	// Get file path for informational purposes
 	fileName := w.workflowData.ID
 	if !strings.HasSuffix(fileName, ".yaml") {
 		fileName += ".yaml"
 	}
-
-	// Get config directory from app
-	configDir := filepath.Join(w.app.cfg.Directories.Default, "workflows")
 	filePath := filepath.Join(configDir, fileName)
 
-	// Let the workflow manager handle the save
-	// This is a placeholder - actual implementation would depend on how your app accesses the workflow manager
 	dialog.ShowInformation("Workflow Created",
 		fmt.Sprintf("Workflow '%s' created successfully and saved to '%s'",
 			w.workflowData.Name, filePath), w.window)
@@ -722,10 +789,76 @@ func (w *WorkflowWizard) saveWorkflow() {
 
 // testWorkflow performs a dry run test of the workflow
 func (w *WorkflowWizard) testWorkflow() {
-	// This is a placeholder - actual implementation would depend on how your app accesses the workflow manager
-	dialog.ShowInformation("Dry Run",
-		"Dry run capability will be implemented to test workflow execution without making actual changes.",
-		w.window)
+	// Validate workflow first
+	if w.workflowData.ID == "" || w.workflowData.Name == "" || len(w.workflowData.Actions) == 0 {
+		w.app.ShowError("Invalid Workflow", fmt.Errorf("workflow must have an ID, name, and at least one action"))
+		return
+	}
+
+	// Show file selection dialog
+	dialog.ShowFileOpen(func(file fyne.URIReadCloser, err error) {
+		if err != nil || file == nil {
+			return // User canceled or error
+		}
+
+		filePath := file.URI().Path()
+		file.Close()
+
+		// Create temporary workflow manager with dry run mode
+		home, err := os.UserHomeDir()
+		if err != nil {
+			w.app.ShowError("Test Error", fmt.Errorf("failed to get home directory: %w", err))
+			return
+		}
+
+		configDir := filepath.Join(home, ".config", "sortd", "workflows")
+		manager, err := workflow.NewManager(configDir)
+		if err != nil {
+			w.app.ShowError("Test Error", fmt.Errorf("failed to initialize workflow manager: %w", err))
+			return
+		}
+
+		// Enable dry run mode
+		manager.SetDryRun(true)
+
+		// Creating a temporary ID for the workflow
+		origID := w.workflowData.ID
+		tempID := fmt.Sprintf("temp-%d", time.Now().Unix())
+		w.workflowData.ID = tempID
+
+		// Add workflow temporarily
+		if err := manager.AddWorkflow(w.workflowData); err != nil {
+			w.workflowData.ID = origID // Restore original ID
+			w.app.ShowError("Test Error", fmt.Errorf("failed to setup workflow for testing: %w", err))
+			return
+		}
+
+		// Run the workflow in dry run mode
+		result, err := manager.ExecuteWorkflow(tempID, filePath)
+
+		// Clean up the temporary workflow
+		manager.DeleteWorkflow(tempID)
+
+		// Restore original ID
+		w.workflowData.ID = origID
+
+		// Handle result
+		if err != nil {
+			w.app.ShowError("Test Error", fmt.Errorf("failed to execute workflow: %w", err))
+			return
+		}
+
+		// Show test result
+		if result.Success {
+			message := fmt.Sprintf("Dry run successful on file: %s\n\n%s\n\nNo actual changes were made.",
+				filepath.Base(filePath), result.Message)
+			dialog.ShowInformation("Test Successful", message, w.window)
+		} else {
+			message := fmt.Sprintf("Dry run failed on file: %s\n\n%s\n\nError: %v",
+				filepath.Base(filePath), result.Message, result.Error)
+			dialog.ShowInformation("Test Failed", message, w.window)
+		}
+	}, w.window)
 }
 
 // updateVisualization updates the workflow visualization preview

@@ -44,7 +44,7 @@ func DaemonControl(cfg *config.Config, foreground bool) error {
 		LogFilePerm: 0640,
 		WorkDir:     cfg.Directories.Default,
 		Umask:       027,
-		Args:        []string{fmt.Sprintf("-c=%s", cfg.Settings.DryRun)},
+		Args:        []string{fmt.Sprintf("-c=%t", cfg.Settings.DryRun)},
 	}
 
 	// Get the daemon
@@ -111,7 +111,7 @@ func (c *daemonContext) Reborn() (bool, error) {
 func (c *daemonContext) WritePid() error {
 	// Get current process PID
 	pid := os.Getpid()
-	
+
 	// Write PID to file
 	f, err := os.Create(c.PidFileName)
 	if err != nil {

@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"image/color"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,7 +12,10 @@ import (
 	"sortd/internal/organize"
 	"sortd/internal/watch"
 	"sortd/pkg/types"
+	"sortd/pkg/workflow"
 	"strings"
+
+	"encoding/json"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -21,6 +25,7 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
+	"gopkg.in/yaml.v3"
 )
 
 // App is the GUI application
@@ -789,8 +794,7 @@ func (a *App) createOrganizeTab() fyne.CanvasObject {
 	})
 
 	viewWorkflowsButton := widget.NewButton("View Existing Workflows", func() {
-		// This is a placeholder - would open workflow management UI
-		a.ShowInfo("Workflow management UI will be implemented here")
+		a.createWorkflowManagementUI()
 	})
 
 	workflowButtons := container.NewGridWithColumns(2, createWorkflowButton, viewWorkflowsButton)
@@ -823,5 +827,379 @@ func (a *App) createOrganizeTab() fyne.CanvasObject {
 			commandSection,
 			layout.NewSpacer(), // Push content up
 		),
+	)
+}
+
+// createWorkflowManagementUI creates and shows a window for managing workflows
+func (a *App) createWorkflowManagementUI() {
+	workflowWindow := a.fyneApp.NewWindow("Workflow Management")
+	workflowWindow.Resize(fyne.NewSize(800, 600))
+
+	// Define workflows list widget
+	var workflowList *widget.List
+	var selectedWorkflowIndex int = -1
+
+	// Create header
+	header := widget.NewLabelWithStyle("Workflow Management", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+
+	// Create workflow list
+	workflowList = widget.NewList(
+		func() int {
+			workflows, _ := a.getWorkflows()
+			return len(workflows)
+		},
+		func() fyne.CanvasObject {
+			return container.NewHBox(
+				container.NewVBox(
+					widget.NewLabel("Name:"),
+					widget.NewLabel("Type:"),
+					widget.NewLabel("Status:"),
+				),
+				container.NewVBox(
+					widget.NewLabel("Workflow Name"),
+					widget.NewLabel("Workflow Type"),
+					widget.NewLabel("Enabled/Disabled"),
+				),
+				layout.NewSpacer(),
+				container.NewVBox(
+					widget.NewButton("Edit", func() {}),
+					widget.NewButton("Delete", func() {}),
+				),
+			)
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			workflows, _ := a.getWorkflows()
+			if int(id) >= len(workflows) {
+				return
+			}
+
+			wf := workflows[id]
+			container := obj.(*fyne.Container)
+
+			infoContainer := container.Objects[1].(*fyne.Container)
+			nameLabel := infoContainer.Objects[0].(*widget.Label)
+			typeLabel := infoContainer.Objects[1].(*widget.Label)
+			statusLabel := infoContainer.Objects[2].(*widget.Label)
+
+			nameLabel.SetText(fmt.Sprintf("%s (ID: %s)", wf.Name, wf.ID))
+
+			// Determine workflow type based on trigger
+			typeText := "Unknown"
+			switch wf.Trigger.Type {
+			case types.FileCreated:
+				typeText = "File Created"
+			case types.FileModified:
+				typeText = "File Modified"
+			case types.FilePatternMatch:
+				typeText = "File Pattern Match"
+			case types.ManualTrigger:
+				typeText = "Manual"
+			case types.ScheduledTrigger:
+				typeText = "Scheduled"
+			}
+			typeLabel.SetText(typeText)
+
+			statusText := "Disabled"
+			if wf.Enabled {
+				statusText = "Enabled"
+			}
+			statusLabel.SetText(statusText)
+
+			// Set up the edit button
+			buttonContainer := container.Objects[3].(*fyne.Container)
+			editButton := buttonContainer.Objects[0].(*widget.Button)
+			editButton.OnTapped = func() {
+				a.editWorkflow(wf.ID)
+			}
+
+			// Set up the delete button
+			deleteButton := buttonContainer.Objects[1].(*widget.Button)
+			deleteButton.OnTapped = func() {
+				a.confirmDeleteWorkflow(wf.ID, workflowList)
+			}
+		},
+	)
+
+	// Handle list selection
+	workflowList.OnSelected = func(id widget.ListItemID) {
+		selectedWorkflowIndex = int(id)
+	}
+	workflowList.OnUnselected = func(id widget.ListItemID) {
+		selectedWorkflowIndex = -1
+	}
+
+	// Create action buttons
+	newButton := widget.NewButton("Create New Workflow", func() {
+		wizard := NewWorkflowWizard(a)
+		wizard.Show()
+		workflowWindow.Hide() // Hide this window while creating
+	})
+
+	refreshButton := widget.NewButton("Refresh List", func() {
+		workflowList.Refresh()
+	})
+
+	// Export/Import buttons
+	importButton := widget.NewButton("Import Workflow", func() {
+		a.importWorkflow(workflowList)
+	})
+
+	exportSelectedButton := widget.NewButton("Export Selected", func() {
+		if selectedWorkflowIndex < 0 {
+			dialog.ShowInformation("No Selection", "Please select a workflow to export", workflowWindow)
+			return
+		}
+
+		workflows, err := a.getWorkflows()
+		if err != nil || selectedWorkflowIndex >= len(workflows) {
+			dialog.ShowError(fmt.Errorf("could not get selected workflow"), workflowWindow)
+			return
+		}
+
+		wf := workflows[selectedWorkflowIndex]
+		a.exportWorkflow(wf, workflowWindow)
+	})
+
+	// Create button container
+	buttons := container.NewHBox(
+		newButton,
+		refreshButton,
+		layout.NewSpacer(),
+		importButton,
+		exportSelectedButton,
+	)
+
+	// Main content
+	content := container.NewBorder(
+		container.NewVBox(
+			header,
+			widget.NewSeparator(),
+			buttons,
+			widget.NewSeparator(),
+		),
+		nil, nil, nil,
+		container.NewScroll(workflowList),
+	)
+
+	workflowWindow.SetContent(content)
+	workflowWindow.Show()
+}
+
+// getWorkflows returns a list of workflows from the workflow manager
+func (a *App) getWorkflows() ([]types.Workflow, error) {
+	// Get the workflows directory from the home directory
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user home directory: %w", err)
+	}
+
+	// Use a fixed path under the .config/sortd directory
+	workflowsDir := filepath.Join(home, ".config", "sortd", "workflows")
+
+	// Create the directory if it doesn't exist
+	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create workflows directory: %w", err)
+	}
+
+	// Initialize the workflow manager
+	manager, err := workflow.NewManager(workflowsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize workflow manager: %w", err)
+	}
+
+	return manager.GetWorkflows(), nil
+}
+
+// editWorkflow opens a workflow wizard for editing an existing workflow
+func (a *App) editWorkflow(id string) {
+	// Get the workflows directory from the home directory
+	home, err := os.UserHomeDir()
+	if err != nil {
+		a.ShowError("Error", fmt.Errorf("failed to get user home directory: %w", err))
+		return
+	}
+
+	// Use a fixed path under the .config/sortd directory
+	workflowsDir := filepath.Join(home, ".config", "sortd", "workflows")
+
+	// Initialize the workflow manager
+	manager, err := workflow.NewManager(workflowsDir)
+	if err != nil {
+		a.ShowError("Error", fmt.Errorf("failed to initialize workflow manager: %w", err))
+		return
+	}
+
+	// Get all workflows and find the one with matching ID
+	workflows := manager.GetWorkflows()
+	var workflowFound bool
+	var wf types.Workflow
+
+	for _, workflow := range workflows {
+		if workflow.ID == id {
+			wf = workflow
+			workflowFound = true
+			break
+		}
+	}
+
+	if !workflowFound {
+		a.ShowError("Error", fmt.Errorf("could not find workflow with ID: %s", id))
+		return
+	}
+
+	// Open workflow wizard with the loaded workflow
+	wizard := NewWorkflowWizard(a)
+	wizard.workflowData = wf
+	wizard.Show()
+}
+
+// confirmDeleteWorkflow shows a confirmation dialog before deleting a workflow
+func (a *App) confirmDeleteWorkflow(id string, workflowList *widget.List) {
+	dialog.ShowConfirm(
+		"Confirm Delete",
+		"Are you sure you want to delete this workflow? This cannot be undone.",
+		func(confirmed bool) {
+			if !confirmed {
+				return
+			}
+
+			// Get the workflows directory from the home directory
+			home, err := os.UserHomeDir()
+			if err != nil {
+				a.ShowError("Delete Failed", fmt.Errorf("failed to get user home directory: %w", err))
+				return
+			}
+
+			// Use a fixed path under the .config/sortd directory
+			workflowsDir := filepath.Join(home, ".config", "sortd", "workflows")
+
+			// Initialize the workflow manager
+			manager, err := workflow.NewManager(workflowsDir)
+			if err != nil {
+				a.ShowError("Delete Failed", fmt.Errorf("failed to initialize workflow manager: %w", err))
+				return
+			}
+
+			if err := manager.DeleteWorkflow(id); err != nil {
+				a.ShowError("Delete Failed", fmt.Errorf("could not delete workflow: %w", err))
+				return
+			}
+
+			workflowList.Refresh()
+		},
+		a.mainWindow,
+	)
+}
+
+// importWorkflow imports a workflow from a file
+func (a *App) importWorkflow(workflowList *widget.List) {
+	dialog.ShowFileOpen(
+		func(reader fyne.URIReadCloser, err error) {
+			if err != nil || reader == nil {
+				return
+			}
+
+			defer reader.Close()
+			data, err := io.ReadAll(reader)
+			if err != nil {
+				a.ShowError("Import Error", fmt.Errorf("could not read file: %w", err))
+				return
+			}
+
+			var wf types.Workflow
+
+			// Try to parse as YAML first
+			err = yaml.Unmarshal(data, &wf)
+			if err != nil {
+				// If not YAML, try JSON
+				err = json.Unmarshal(data, &wf)
+				if err != nil {
+					a.ShowError("Import Error", fmt.Errorf("invalid workflow format: %w", err))
+					return
+				}
+			}
+
+			// Save the imported workflow
+			home, err := os.UserHomeDir()
+			if err != nil {
+				a.ShowError("Import Error", fmt.Errorf("failed to get user home directory: %w", err))
+				return
+			}
+
+			// Use a fixed path under the .config/sortd directory
+			workflowsDir := filepath.Join(home, ".config", "sortd", "workflows")
+
+			// Initialize the workflow manager
+			manager, err := workflow.NewManager(workflowsDir)
+			if err != nil {
+				a.ShowError("Import Error", fmt.Errorf("failed to initialize workflow manager: %w", err))
+				return
+			}
+
+			if err := manager.AddWorkflow(wf); err != nil {
+				a.ShowError("Import Error", fmt.Errorf("could not save workflow: %w", err))
+				return
+			}
+
+			workflowList.Refresh()
+			dialog.ShowInformation("Import Successful", "Workflow imported successfully", a.mainWindow)
+		},
+		a.mainWindow,
+	)
+}
+
+// exportWorkflow exports a workflow to a file
+func (a *App) exportWorkflow(wf types.Workflow, parent fyne.Window) {
+	formatWindow := a.fyneApp.NewWindow("Select Export Format")
+	formatWindow.Resize(fyne.NewSize(300, 150))
+
+	formatWindow.SetContent(container.NewVBox(
+		widget.NewLabel("Select export format:"),
+		widget.NewButton("JSON", func() {
+			formatWindow.Close()
+			data, err := json.MarshalIndent(wf, "", "  ")
+			if err != nil {
+				a.ShowError("Export Error", fmt.Errorf("could not convert workflow to JSON: %w", err))
+				return
+			}
+
+			saveExportFile(data, fmt.Sprintf("%s.json", wf.ID), parent)
+		}),
+		widget.NewButton("YAML", func() {
+			formatWindow.Close()
+			data, err := yaml.Marshal(wf)
+			if err != nil {
+				a.ShowError("Export Error", fmt.Errorf("could not convert workflow to YAML: %w", err))
+				return
+			}
+
+			saveExportFile(data, fmt.Sprintf("%s.yaml", wf.ID), parent)
+		}),
+		widget.NewButton("Cancel", func() {
+			formatWindow.Close()
+		}),
+	))
+
+	formatWindow.Show()
+}
+
+// Helper function to save export data to a file
+func saveExportFile(data []byte, filename string, parent fyne.Window) {
+	dialog.ShowFileSave(
+		func(writer fyne.URIWriteCloser, err error) {
+			if err != nil || writer == nil {
+				return
+			}
+
+			defer writer.Close()
+			_, err = writer.Write(data)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("could not save file: %w", err), parent)
+				return
+			}
+
+			dialog.ShowInformation("Export Successful", "Workflow exported successfully", parent)
+		},
+		parent,
 	)
 }
