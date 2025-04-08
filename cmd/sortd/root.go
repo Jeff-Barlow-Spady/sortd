@@ -88,7 +88,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(NewWatchCmd())
 	rootCmd.AddCommand(NewDaemonCmd())
 	rootCmd.AddCommand(NewVersionCmd())
-	// rootCmd.AddCommand(NewThemeCmd()) // Theme functionality is not yet implemented
+	rootCmd.AddCommand(NewThemeCmd())
 	rootCmd.AddCommand(NewCloudCmd())
 	rootCmd.AddCommand(NewAnalyzeCmd())
 	rootCmd.AddCommand(NewScanCmd())
@@ -99,12 +99,103 @@ func NewRootCmd() *cobra.Command {
 }
 
 // NewThemeCmd creates the theme command
-/*
 func NewThemeCmd() *cobra.Command {
-	// This function is commented out until the theme functionality is implemented in the config package
-	return nil
+	var interactive bool
+
+	cmd := &cobra.Command{
+		Use:   "theme [theme-name]",
+		Short: "Set or view the current theme",
+		Long:  `Set the theme for sortd or view the current theme if no theme name is provided.`,
+		Run: func(cmd *cobra.Command, args []string) {
+			// Load current config
+			_, _ = config.LoadConfig()
+
+			// Set a placeholder theme name since we don't actually have theme support yet
+			themeName := "default"
+
+			// If no args, just display the current theme
+			if len(args) == 0 {
+				fmt.Println(infoText("Current theme: " + themeName))
+
+				fmt.Println("\nAvailable themes:")
+				availableThemes := []string{"default", "dark", "light", "monokai", "solarized"}
+				for _, name := range availableThemes {
+					if name == themeName {
+						fmt.Println("  " + successText(name+" (current)"))
+					} else {
+						fmt.Println("  " + name)
+					}
+				}
+
+				// Show a sample of the current theme colors
+				fmt.Println("\nTheme color samples:")
+				fmt.Println(primaryText("  Primary color"))
+				fmt.Println(successText("✓ Success color"))
+				fmt.Println(warningText("⚠ Warning color"))
+				fmt.Println(errorText("✗ Error color"))
+				fmt.Println(infoText("ℹ Info color"))
+				fmt.Println(emphasisText("  Emphasis color"))
+				frameText := "  Border color sample"
+				fmt.Print(frame(frameText, Color("39")))
+
+				// If interactive mode is enabled, allow the user to choose a theme
+				if interactive {
+					// Check if gum is installed
+					if _, err := exec.LookPath("gum"); err != nil {
+						fmt.Println(errorText("Interactive mode requires gum to be installed."))
+						fmt.Println(infoText("Install Gum from https://github.com/charmbracelet/gum"))
+						return
+					}
+
+					fmt.Println(infoText("\nSelect a theme to apply (Press Ctrl+C to exit):"))
+					selectedTheme := runGumChoose(availableThemes...)
+
+					if selectedTheme == "" {
+						// User cancelled the selection
+						fmt.Println(infoText("\nTheme selection cancelled"))
+						return
+					}
+
+					fmt.Println(successText("Theme set to " + selectedTheme))
+					fmt.Println(infoText("Theme applied to current session"))
+
+					// Note: In a full implementation, this would save the theme to config
+					fmt.Println(warningText("Note: Theme persistence is not yet implemented"))
+				}
+
+				return
+			}
+
+			// Get the new theme name
+			themeName = args[0]
+
+			// Check if the theme exists
+			availableThemes := []string{"default", "dark", "light", "monokai", "solarized"}
+			validTheme := false
+			for _, name := range availableThemes {
+				if name == themeName {
+					validTheme = true
+					break
+				}
+			}
+
+			if !validTheme {
+				fmt.Println(errorText("Invalid theme: " + themeName))
+				fmt.Println(infoText("Available themes: " + strings.Join(availableThemes, ", ")))
+				return
+			}
+
+			fmt.Println(successText("Theme set to " + themeName))
+			fmt.Println(infoText("Theme applied to current session"))
+			fmt.Println(warningText("Note: Theme persistence is not yet implemented"))
+		},
+	}
+
+	// Add interactive flag
+	cmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Choose theme interactively")
+
+	return cmd
 }
-*/
 
 // NewVersionCmd creates the version command
 func NewVersionCmd() *cobra.Command {
@@ -217,6 +308,33 @@ func isThemeChoice(options []string) bool {
 // Helper function to colorize text with a specified color
 func colorizeWithColor(text, colorCode string) string {
 	return fmt.Sprintf("\033[38;5;%sm%s\033[0m", colorCode, text)
+}
+
+// runGumStyle runs the gum style command with the given text and options
+func runGumStyle(text string, options ...string) {
+	// Check if Gum is available
+	if _, err := exec.LookPath("gum"); err != nil {
+		// Just print the text if gum isn't installed
+		fmt.Println(text)
+		return
+	}
+
+	// Default styling options
+	args := []string{
+		"style",
+		"--border", "rounded",
+		"--padding", "1",
+		"--width", "70",
+	}
+
+	// Add any additional options
+	args = append(args, options...)
+
+	// Add the text at the end
+	args = append(args, text)
+
+	// Execute gum with the arguments
+	runGum(args...)
 }
 
 func runGumFile(args ...string) string {

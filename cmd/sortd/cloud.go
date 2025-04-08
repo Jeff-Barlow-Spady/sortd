@@ -252,30 +252,34 @@ func newCloudStatusCmd() *cobra.Command {
 			// Get cloud configuration
 			cloudCfg := getCloudConfig()
 
-			if !cloudCfg.Enabled {
-				fmt.Println(warningText("\nCloud storage is not configured"))
-				fmt.Println(infoText("Use 'sortd cloud connect' to set up cloud storage"))
-				return
-			}
+			// Show a styled status message
+			statusText := "Cloud Storage Features\n\n"
 
-			fmt.Println(successText("\nCloud storage is enabled"))
-			fmt.Println("Provider: " + infoText(cloudCfg.Provider))
+			if cloudCfg.Enabled {
+				statusText += successText("✓ Connected") + " to " + emphasisText(cloudCfg.Provider) + "\n\n"
 
-			if cloudCfg.SyncEnabled {
-				fmt.Println("Sync: " + successText("Enabled"))
-				fmt.Println("Sync interval: " + infoText(fmt.Sprintf("%d minutes", cloudCfg.SyncInterval)))
-				fmt.Println("Last sync: " + infoText("Unknown")) // In a real implementation, this would show actual timestamp
+				if cloudCfg.SyncEnabled {
+					statusText += "Sync: " + successText("Enabled") + "\n"
+					statusText += "Interval: " + emphasisText(fmt.Sprintf("%d minutes", cloudCfg.SyncInterval)) + "\n"
+				} else {
+					statusText += "Sync: " + warningText("Disabled") + "\n"
+				}
 			} else {
-				fmt.Println("Sync: " + warningText("Disabled"))
+				statusText += warningText("⚠ Not Connected") + "\n\n"
+				statusText += infoText("Use 'sortd cloud connect' to set up cloud storage")
 			}
 
-			// In a real implementation, we'd show additional status info
-			fmt.Println("\nStorage usage:")
-			fmt.Println("  Pending uploads: " + infoText("0 files"))
-			fmt.Println("  Pending downloads: " + infoText("0 files"))
-			fmt.Println("  Last error: " + successText("None"))
+			// Add feature overview
+			statusText += "\n\nUpcoming Cloud Features:\n"
+			statusText += "• Remote file organization\n"
+			statusText += "• Cross-device synchronization\n"
+			statusText += "• Cloud-specific rules and filters\n"
+			statusText += "• Automated backup and restore"
 
-			fmt.Println(infoText("\nUse 'sortd cloud sync' to manually trigger synchronization"))
+			// Use our new styled output
+			runGumStyle(statusText,
+				"--foreground", "212",
+				"--border-foreground", "99")
 		},
 	}
 }
