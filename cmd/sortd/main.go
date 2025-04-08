@@ -51,9 +51,12 @@ func main() {
 	// Initialize workflow commands
 	initWorkflowCommands(rootCmd)
 
-	// Execute the command
+	// Execute the command with improved error handling
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+		// Print to both stderr and stdout to ensure tests can capture it
+		errMsg := fmt.Sprintf("Error: %s", err)
+		fmt.Fprintln(os.Stderr, errMsg)
+		fmt.Println(errMsg) // Also print to stdout for test capturing
 		os.Exit(1)
 	}
 }

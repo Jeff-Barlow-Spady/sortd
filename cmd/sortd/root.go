@@ -177,52 +177,41 @@ func runGumChoose(options ...string) string {
 	// Default to the first option if Gum fails
 	defaultOption := options[0]
 
-	// Simplified implementation without theme checking
+	// Check if this appears to be a theme choice
+	if isThemeChoice(options) {
+		// Use enhanced styling for theme selection
+		args := []string{"choose",
+			"--header", "Use arrow keys to navigate, space to select",
+			"--header.foreground", "39", // Blue for header
+			"--cursor.foreground", "213", // Highlight for cursor
+			"--selected.foreground", "114", // Green for selected item
+			"--height", "10"}
+		args = append(args, options...)
+		return runGumWithDefault(defaultOption, args...)
+	}
+
+	// Standard implementation for non-theme choices
 	args := []string{"choose"}
 	args = append(args, options...)
 	return runGumWithDefault(defaultOption, args...)
-
-	/* Theme functionality currently not implemented
-	// Enhanced implementation for theme selection
-	// Prepare a list of themed options with their respective colors
-	var themedOptions []string
-	for _, themeName := range options {
-		theme := config.GetTheme(themeName)
-
-		// Style the theme name with its primary color
-		themedOption := colorizeWithColor(themeName, theme["primary"])
-		themedOptions = append(themedOptions, themedOption)
-	}
-	*/
 }
 
 // Helper to determine if this is a theme choice (list of theme names)
 func isThemeChoice(options []string) bool {
-	// Always return false since theme functionality is not implemented
-	return false
+	// Simple heuristic: if the list contains common theme names, it's likely a theme choice
+	themeNames := []string{"default", "dark", "light", "monokai", "nord", "solarized"}
 
-	/* Original implementation
-	if len(options) == 0 {
-		return false
-	}
-
-	// Get the list of valid themes
-	themes := config.ListThemes()
-
-	// Check if the first few options are valid themes
-	themeCount := 0
+	matches := 0
 	for _, option := range options {
-		for _, theme := range themes {
-			if option == theme {
-				themeCount++
+		for _, theme := range themeNames {
+			if strings.Contains(strings.ToLower(option), theme) {
+				matches++
 				break
 			}
 		}
 	}
 
-	// If most options are valid themes, consider it a theme choice
-	return themeCount >= len(options)/2
-	*/
+	return matches >= len(options)/3 // If at least 1/3 of options match theme names
 }
 
 // Helper function to colorize text with a specified color
