@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"sortd/internal/config"
+	"sortd/internal/errors"
 	"sortd/internal/log"
 	"sortd/pkg/types"
 )
@@ -26,46 +27,50 @@ type Engine struct {
 	config     *config.Config
 }
 
-func (e *Engine) SetConfig(cfg *config.Config) {
-	e.patterns = cfg.Organize.Patterns
-	e.createDirs = cfg.Settings.CreateDirs
-	e.backup = cfg.Settings.Backup
-	e.collision = cfg.Settings.Collision
-	e.config = cfg
-}
-
 func (e *Engine) OrganizeFile(path string) error {
+	logger := log.LogWithFields(log.F("path", path))
+
 	if e.config == nil {
-		return fmt.Errorf("no config set")
+		return errors.NewConfigError("no config set", "engine", errors.ConfigNotSet, nil)
 	}
 
 	// Get file info
 	info, err := os.Stat(path)
 	if err != nil {
-		return err
+		return errors.NewFileError("failed to access file", path, errors.FileAccessDenied, err)
 	}
 
 	// Find matching pattern
 	for _, pattern := range e.config.Organize.Patterns {
 		matched, err := filepath.Match(pattern.Match, info.Name())
 		if err != nil {
-			return err
+			return errors.NewRuleError("invalid pattern", pattern.Match, errors.InvalidRule, err)
 		}
 		if matched {
 			// Create target directory if needed
 			targetDir := filepath.Join(filepath.Dir(path), pattern.Target)
 			if e.config.Settings.CreateDirs {
 				if err := os.MkdirAll(targetDir, 0755); err != nil {
-					return err
+					return errors.NewFileError("failed to create directory", targetDir, errors.FileCreateFailed, err)
 				}
 			}
 
 			// Move file
 			newPath := filepath.Join(targetDir, info.Name())
-			return os.Rename(path, newPath)
+			if err := os.Rename(path, newPath); err != nil {
+				return errors.NewFileError("failed to move file", path, errors.FileOperationFailed, err)
+			}
+
+			logger.With(
+				log.F("destination", newPath),
+				log.F("pattern", pattern.Match),
+			).Info("File organized successfully")
+
+			return nil
 		}
 	}
 
+	logger.Debug("No matching pattern found for file")
 	return nil
 }
 
@@ -100,27 +105,52 @@ func (e *Engine) IsDryRun() bool {
 // AddPattern adds a new organization pattern
 func (e *Engine) AddPattern(pattern types.Pattern) {
 	e.patterns = append(e.patterns, pattern)
-	log.Debug("Added pattern: match=%s, target=%s", pattern.Match, pattern.Target)
+	log.Debugf("Added pattern: match=%s, target=%s", pattern.Match, pattern.Target)
 }
 
 // findDestination determines where a file should go based on patterns
 func (e *Engine) findDestination(filename string) (string, bool) {
+	logger := log.LogWithFields(log.F("file", filename))
+
 	for _, pattern := range e.patterns {
 		// Check glob pattern
 		matched, err := filepath.Match(pattern.Match, filepath.Base(filename))
-		if err != nil || !matched {
+		if err != nil {
+			logger.With(
+				log.F("pattern", pattern.Match),
+				log.F("error", err.Error()),
+			).Warn("Invalid pattern, skipping")
+			continue
+		}
+
+		if !matched {
 			continue
 		}
 
 		// Construct the full destination path relative to the source file's directory
 		sourceDir := filepath.Dir(filename)
-		return filepath.Join(sourceDir, pattern.Target), true
+		destination := filepath.Join(sourceDir, pattern.Target)
+
+		logger.With(
+			log.F("pattern", pattern.Match),
+			log.F("destination", destination),
+		).Debug("Pattern matched")
+
+		return destination, true
 	}
+
+	logger.Debug("No matching pattern found")
 	return "", false
 }
 
 // MoveFile moves a file from source to destination, handling collisions based on config.
 func (e *Engine) MoveFile(src, dest string) error {
+	logger := log.LogWithFields(
+		log.F("source", src),
+		log.F("destination", dest),
+		log.F("dry_run", e.dryRun),
+	)
+
 	// Clean paths for comparison
 	cleanSrc := filepath.Clean(src)
 	cleanDest := filepath.Clean(dest)
@@ -128,23 +158,23 @@ func (e *Engine) MoveFile(src, dest string) error {
 	// Check for same file
 	if cleanSrc == cleanDest {
 		// Moving to the same place is not an error, just do nothing.
-		log.Debug("Source and destination are the same, skipping: %s", src)
+		logger.Debug("Source and destination are the same, skipping")
 		return nil
 	}
 
 	// Verify source exists and get info
 	srcInfo, err := os.Stat(cleanSrc)
 	if err != nil {
-		return fmt.Errorf("source file error: %w", err)
+		return errors.NewFileError("source file error", cleanSrc, errors.FileAccessDenied, err)
 	}
 	if srcInfo.IsDir() {
-		return fmt.Errorf("cannot move directory as file: %s", src)
+		return errors.NewFileError("cannot move directory as file", cleanSrc, errors.InvalidOperation, nil)
 	}
 
 	// Ensure destination directory exists before checking destination file
 	destDir := filepath.Dir(cleanDest)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %w", err)
+		return errors.NewFileError("failed to create destination directory", destDir, errors.FileCreateFailed, err)
 	}
 
 	// Lock for thread safety when checking and potentially modifying destination
@@ -153,34 +183,36 @@ func (e *Engine) MoveFile(src, dest string) error {
 
 	// Check for dry run mode first
 	if e.dryRun {
-		log.Info("Would move %s -> %s", src, cleanDest)
+		logger.Info("Would move file (dry run)")
 		return nil
 	}
 
 	// Collision handling
 	finalDest, err := e.handleCollision(cleanSrc, cleanDest)
 	if err != nil {
+		log.LogError(err, "Collision handling failed")
 		return err
 	}
 	// If finalDest is empty, it means we're skipping the move
 	if finalDest == "" {
+		logger.Info("Skipping file move due to collision handling")
 		return nil
 	}
 
 	// Create backup if needed
 	if e.backup {
 		if err := e.createBackup(finalDest); err != nil {
-			return fmt.Errorf("backup failed: %w", err)
+			return errors.Wrap(err, "backup failed")
 		}
 	}
 
 	// Move the file
-	log.Debug("Moving %s to %s", cleanSrc, finalDest)
+	logger.With(log.F("final_destination", finalDest)).Debug("Moving file")
 	if err := os.Rename(cleanSrc, finalDest); err != nil {
-		return fmt.Errorf("failed to move file: %w", err)
+		return errors.NewFileError("failed to move file", cleanSrc, errors.FileOperationFailed, err)
 	}
 
-	log.Info("Moved %s -> %s", src, finalDest)
+	logger.With(log.F("final_destination", finalDest)).Info("Moved file successfully")
 	return nil
 }
 
@@ -188,6 +220,12 @@ func (e *Engine) MoveFile(src, dest string) error {
 // It returns the final destination path and an error if any.
 // If the file should be skipped, it returns an empty string and nil error.
 func (e *Engine) handleCollision(src, dest string) (string, error) {
+	logger := log.LogWithFields(
+		log.F("source", src),
+		log.F("destination", dest),
+		log.F("strategy", e.collision),
+	)
+
 	// Check if destination already exists
 	_, err := os.Stat(dest)
 	if os.IsNotExist(err) {
@@ -196,19 +234,19 @@ func (e *Engine) handleCollision(src, dest string) (string, error) {
 	}
 	if err != nil {
 		// Some other error occurred
-		return "", fmt.Errorf("error checking destination %s: %w", dest, err)
+		return "", errors.NewFileError("error checking destination", dest, errors.FileAccessDenied, err)
 	}
 
 	// Handle collision based on strategy
-	log.Warn("Destination file %s already exists. Handling collision with strategy: %s", dest, e.collision)
+	logger.Warn("Destination file already exists, handling collision")
 
 	switch e.collision {
 	case "skip":
-		log.Info("Skipping move for %s due to collision (strategy: skip)", src)
+		logger.Info("Skipping move due to collision")
 		return "", nil // Empty string signals skip
 
 	case "overwrite":
-		log.Warn("Overwriting %s (strategy: overwrite)", dest)
+		logger.Warn("Overwriting destination file")
 		return dest, nil // Return original dest for overwriting
 
 	case "rename":
@@ -217,29 +255,34 @@ func (e *Engine) handleCollision(src, dest string) (string, error) {
 
 	case "ask":
 		// For now, skip when ask is specified
-		log.Warn("Collision strategy 'ask' not implemented, treating as 'skip'")
+		logger.Warn("Collision strategy 'ask' not implemented, treating as 'skip'")
 		return "", nil
 
 	default:
-		return "", fmt.Errorf("unknown collision strategy: %s", e.collision)
+		return "", errors.NewConfigError("unknown collision strategy", e.collision, errors.InvalidConfig, nil)
 	}
 }
 
 // findUniqueDestName finds a unique filename by adding counter to the basename
 func (e *Engine) findUniqueDestName(originalPath string) (string, error) {
+	logger := log.LogWithFields(log.F("original_path", originalPath))
+
 	ext := filepath.Ext(originalPath)
 	base := strings.TrimSuffix(originalPath, ext)
 
 	for counter := 1; counter <= 1000; counter++ {
 		newName := fmt.Sprintf("%s_(%d)%s", base, counter, ext)
 
-		if _, err := os.Stat(newName); os.IsNotExist(err) {
-			log.Info("Renaming destination to %s due to collision (strategy: rename)", newName)
+		// Check if this name exists
+		_, err := os.Stat(newName)
+		if os.IsNotExist(err) {
+			// Found a name that doesn't exist
+			logger.With(log.F("new_name", newName)).Debug("Found unique destination name")
 			return newName, nil
 		}
 	}
-
-	return "", fmt.Errorf("failed to find unique name for %s after 1000 attempts", originalPath)
+	logger.Warn("Could not find unique filename after 1000 attempts")
+	return "", errors.New("couldn't find a unique name after 1000 attempts")
 }
 
 // createBackup creates a backup of the destination file if it exists
@@ -279,10 +322,16 @@ func (e *Engine) createBackup(dest string) error {
 
 // OrganizeFiles moves multiple files to a destination directory
 func (e *Engine) OrganizeFiles(files []string, destDir string) error {
+	logger := log.LogWithFields(
+		log.F("dest_dir", destDir),
+		log.F("file_count", len(files)),
+	)
+	logger.Info("Organizing files to destination directory")
+
 	for _, file := range files {
 		dest := filepath.Join(destDir, filepath.Base(file))
 		if err := e.MoveFile(file, dest); err != nil {
-			return fmt.Errorf("failed to move %s: %w", file, err)
+			return errors.Wrapf(err, "failed to move %s", file)
 		}
 	}
 	return nil
@@ -290,15 +339,17 @@ func (e *Engine) OrganizeFiles(files []string, destDir string) error {
 
 // OrganizeByPatterns organizes files according to defined patterns
 func (e *Engine) OrganizeByPatterns(files []string) error {
-	log.Info("Organizing %d files using patterns", len(files))
+	logger := log.LogWithFields(log.F("file_count", len(files)))
+	logger.Info("Organizing files using patterns")
+
 	for _, file := range files {
 		if destDir, found := e.findDestination(file); found {
 			dest := filepath.Join(destDir, filepath.Base(file))
 			if err := e.MoveFile(file, dest); err != nil {
-				return fmt.Errorf("failed to move %s: %w", file, err)
+				return errors.Wrapf(err, "failed to move %s", file)
 			}
 		} else {
-			log.Debug("No pattern match for file: %s", file)
+			log.LogWithFields(log.F("file", file)).Debug("No pattern match for file")
 		}
 	}
 	return nil
@@ -306,30 +357,73 @@ func (e *Engine) OrganizeByPatterns(files []string) error {
 
 // Add directory organization method
 func (e *Engine) OrganizeDir(dir string) ([]string, error) {
+	logger := log.LogWithFields(log.F("directory", dir))
 	var organized []string
-	// Implementation here
+
+	// Check if directory exists
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		return nil, errors.NewFileError("failed to access directory", dir, errors.FileAccessDenied, err)
+	}
+
+	if !dirInfo.IsDir() {
+		return nil, errors.NewFileError("path is not a directory", dir, errors.InvalidOperation, nil)
+	}
+
+	// Read directory contents
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, errors.NewFileError("failed to read directory", dir, errors.FileAccessDenied, err)
+	}
+
+	logger.With(log.F("file_count", len(entries))).Info("Organizing directory")
+
+	// Process each file
+	for _, entry := range entries {
+		// Skip directories
+		if entry.IsDir() {
+			continue
+		}
+
+		// Get full file path
+		filePath := filepath.Join(dir, entry.Name())
+
+		// Try to organize this file
+		err := e.OrganizeFile(filePath)
+		if err != nil {
+			log.LogError(err, "Failed to organize file")
+			continue
+		}
+
+		// Add to the list of organized files
+		organized = append(organized, filePath)
+	}
+
 	return organized, nil
 }
 
 // OrganizeDirectory organizes all files in a directory according to the configured patterns
 func (e *Engine) OrganizeDirectory(directory string) ([]types.OrganizeResult, error) {
+	logger := log.LogWithFields(log.F("directory", directory))
 	var results []types.OrganizeResult
 
 	// Check if directory exists
 	dirInfo, err := os.Stat(directory)
 	if err != nil {
-		return nil, fmt.Errorf("error accessing directory: %w", err)
+		return nil, errors.NewFileError("failed to access directory", directory, errors.FileAccessDenied, err)
 	}
 
 	if !dirInfo.IsDir() {
-		return nil, fmt.Errorf("path is not a directory: %s", directory)
+		return nil, errors.NewFileError("path is not a directory", directory, errors.InvalidOperation, nil)
 	}
 
 	// Read directory contents
 	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return nil, fmt.Errorf("error reading directory: %w", err)
+		return nil, errors.NewFileError("failed to read directory", directory, errors.FileAccessDenied, err)
 	}
+
+	logger.With(log.F("file_count", len(entries))).Info("Organizing directory")
 
 	// Process each file
 	for _, entry := range entries {

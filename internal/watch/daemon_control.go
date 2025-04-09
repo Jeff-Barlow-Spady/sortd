@@ -63,7 +63,7 @@ func DaemonControl(cfg *config.Config, foreground bool) error {
 
 	// Set up signal handling
 	chSig := make(chan os.Signal, 1)
-	signal.Notify(chSig, os.Interrupt, os.Kill, syscall.SIGTERM)
+	signal.Notify(chSig, os.Interrupt, syscall.SIGTERM)
 
 	// Start the daemon
 	if err := startDaemon(); err != nil {

@@ -19,21 +19,16 @@ import (
 
 // Manager handles the loading, evaluating, and executing of workflows
 type Manager struct {
-	workflows    []types.Workflow
-	configPath   string
-	watcher      *fsnotify.Watcher
-	eventChannel chan fsnotify.Event
-	stopChannel  chan struct{}
-	dryRun       bool
+	workflows  []types.Workflow
+	configPath string
+	dryRun     bool
 }
 
 // NewManager creates a new workflow manager instance
 func NewManager(configPath string) (*Manager, error) {
 	manager := &Manager{
-		configPath:   configPath,
-		eventChannel: make(chan fsnotify.Event),
-		stopChannel:  make(chan struct{}),
-		dryRun:       false,
+		configPath: configPath,
+		dryRun:     false,
 	}
 
 	// Load workflows from config
@@ -103,121 +98,93 @@ func validateWorkflow(workflow *types.Workflow) error {
 	return nil
 }
 
-// StartWatcher starts the file system watcher for triggering workflows
-func (m *Manager) StartWatcher(directories []string) error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("failed to create file watcher: %w", err)
-	}
-	m.watcher = watcher
-
-	// Add directories to watch
-	for _, dir := range directories {
-		if err := watcher.Add(dir); err != nil {
-			return fmt.Errorf("failed to watch directory %s: %w", dir, err)
-		}
-	}
-
-	// Start watching for events
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				m.eventChannel <- event
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				fmt.Fprintf(os.Stderr, "Error watching files: %v\n", err)
-			case <-m.stopChannel:
-				return
-			}
-		}
-	}()
-
-	// Process events
-	go func() {
-		for {
-			select {
-			case event := <-m.eventChannel:
-				m.processFileEvent(event)
-			case <-m.stopChannel:
-				return
-			}
-		}
-	}()
-
-	return nil
-}
-
-// StopWatcher stops the file system watcher
-func (m *Manager) StopWatcher() {
-	if m.watcher != nil {
-		m.watcher.Close()
-	}
-	close(m.stopChannel)
-}
-
-// processFileEvent handles file system events and triggers appropriate workflows
-func (m *Manager) processFileEvent(event fsnotify.Event) {
+// ProcessEvent handles a single file system event received from an external watcher.
+// It checks if any enabled workflows should be triggered by this event based on
+// type, pattern, and conditions. If a matching workflow is found and executed,
+// it returns processed=true. If execution fails, it returns processed=false and the error.
+func (m *Manager) ProcessEvent(event fsnotify.Event) (processed bool, err error) {
 	// Skip temporary and hidden files
 	fileName := filepath.Base(event.Name)
 	if strings.HasPrefix(fileName, ".") || strings.HasSuffix(fileName, "~") {
-		return
+		return false, nil // Not processed, no error
 	}
 
-	// Determine event type
+	// Basic check: ensure file exists before proceeding (might have been deleted quickly)
+	fileInfo, statErr := os.Stat(event.Name)
+	if statErr != nil {
+		// Log? For now, just treat as not processed
+		return false, nil
+	}
+
+	// Determine event type for trigger matching
 	var triggerType types.TriggerType
+	// Only consider Create or Write events for workflow triggers
 	if event.Op&fsnotify.Create == fsnotify.Create {
 		triggerType = types.FileCreated
 	} else if event.Op&fsnotify.Write == fsnotify.Write {
 		triggerType = types.FileModified
 	} else {
-		return // Skip other event types
+		return false, nil // Skip other event types (like Chmod, Remove)
 	}
 
-	// Process event through workflows
+	// Iterate through loaded workflows to find a match
+	var workflowProcessed bool = false // Track if any workflow handled this
+
 	for _, workflow := range m.workflows {
 		if !workflow.Enabled {
 			continue
 		}
 
-		// Check if this workflow should be triggered
-		if workflow.Trigger.Type != triggerType && workflow.Trigger.Type != types.FilePatternMatch {
+		// Check if trigger type matches
+		// Allow FilePatternMatch to trigger on Create or Write events
+		triggerMatches := (workflow.Trigger.Type == triggerType) ||
+			(workflow.Trigger.Type == types.FilePatternMatch && (triggerType == types.FileCreated || triggerType == types.FileModified))
+
+		if !triggerMatches {
 			continue
 		}
 
-		// For pattern match triggers, check the pattern
-		if workflow.Trigger.Type == types.FilePatternMatch {
-			pattern, err := glob.Compile(workflow.Trigger.Pattern)
-			if err != nil || !pattern.Match(event.Name) {
-				continue
+		// --- Trigger Type Matches ---
+		// Now, always check the pattern if one is defined in the trigger
+		if workflow.Trigger.Pattern != "" {
+			patternMatcher, compileErr := glob.Compile(workflow.Trigger.Pattern)
+			if compileErr != nil {
+				fmt.Fprintf(os.Stderr, "Error compiling workflow pattern '%s' for %s: %v\n", workflow.Trigger.Pattern, workflow.ID, compileErr)
+				continue // Skip workflow with invalid pattern
+			}
+			// Match against the full path of the event
+			if !patternMatcher.Match(event.Name) {
+				continue // Pattern doesn't match
 			}
 		}
+		// At this point, the trigger type and pattern (if applicable) match
 
-		// File info for condition evaluation
-		fileInfo, err := os.Stat(event.Name)
-		if err != nil {
-			continue
-		}
-
-		// Evaluate conditions
+		// Evaluate conditions using the fileInfo we got earlier
 		if !m.evaluateConditions(workflow.Conditions, event.Name, fileInfo) {
-			continue
+			continue // Conditions not met
 		}
 
-		// Execute actions
+		// --- Trigger and Conditions Met ---
+		// Execute the workflow actions
 		result := m.executeWorkflow(workflow, event.Name)
+		workflowProcessed = true // Mark that at least one workflow was triggered
 
 		// Log the result
 		fmt.Printf("Workflow %s (%s) execution: %v\n", workflow.Name, workflow.ID, result.Success)
 		if !result.Success && result.Error != nil {
 			fmt.Printf("  Error: %v\n", result.Error)
+			// If a workflow fails, return processed=true (it was attempted) but also return the error
+			return true, result.Error
 		}
+
+		// If we successfully executed *this* workflow, we consider the event processed by workflows.
+		// We could add logic here to stop processing further workflows if needed (e.g., based on workflow priority or a 'stop processing' flag)
+		// For now, we'll let subsequent workflows also trigger if they match.
 	}
+
+	// Return true if any workflow was triggered and executed (even if others didn't match)
+	// Return nil error if all triggered workflows executed successfully
+	return workflowProcessed, nil
 }
 
 // evaluateConditions checks if a file meets all the conditions

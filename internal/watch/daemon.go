@@ -131,18 +131,7 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("no valid directories to watch")
 	}
 
-	// Also start the workflow manager watcher if available
-	if d.workflowManager != nil {
-		// Start the workflow manager's watcher for the same directories
-		if err := d.workflowManager.StartWatcher(d.watcher.WatchList()); err != nil {
-			log.Warnf("Failed to start workflow manager watcher: %v", err)
-			// Don't fail the whole daemon if just the workflow manager fails
-		} else {
-			log.Info("Workflow manager watcher started successfully")
-		}
-	}
-
-	// Start processing file events
+	// Start processing file events from the single watcher
 	go d.processEvents()
 
 	d.running = true
@@ -157,13 +146,7 @@ func (d *Daemon) Stop() {
 		return
 	}
 
-	// Stop the workflow manager watcher if it was started
-	if d.workflowManager != nil {
-		d.workflowManager.StopWatcher()
-		log.Info("Workflow manager watcher stopped.")
-	}
-
-	// Stop the watcher
+	// Stop the main watcher
 	if err := d.watcher.Close(); err != nil {
 		log.Errorf("Error closing watcher: %v", err)
 	}
@@ -180,18 +163,6 @@ func (d *Daemon) AddWatchDirectory(dir string) error {
 	}
 
 	log.Infof("Dynamically added watch directory: %s", dir)
-
-	// Also add to the workflow manager if available
-	if d.workflowManager != nil {
-		// Add the same directory to the workflow manager's watcher
-		// We use a slice for consistency with the StartWatcher method
-		if err := d.workflowManager.StartWatcher([]string{dir}); err != nil {
-			log.Warnf("Failed to add directory to workflow manager watcher: %v", err)
-			// Don't fail the whole operation if just the workflow manager update fails
-		} else {
-			log.Info("Directory added to workflow manager watcher")
-		}
-	}
 
 	return nil
 }
@@ -267,12 +238,33 @@ func (d *Daemon) processEvents() {
 				d.lastActivity = time.Now()
 				d.mutex.Unlock()
 
-				// Process the file using the traditional engine
-				log.Debugf("Processing file event for: %s", event.Name)
-				d.organizeFile(event.Name)
+				// --- Event Processing Logic ---
+				log.Debugf("Processing event for: %s", event.Name)
 
-				// NOTE: We no longer need to forward events manually to the workflow manager
-				// because it has its own watcher running via StartWatcher()
+				// 1. Try processing with Workflow Manager first
+				var workflowHandled bool = false
+				if d.workflowManager != nil {
+					processed, wfErr := d.workflowManager.ProcessEvent(event)
+					if wfErr != nil {
+						// Log error from workflow execution but continue, as config might still match
+						log.Errorf("Error processing event with workflow manager for %s: %v", event.Name, wfErr)
+					}
+					if processed {
+						log.Debugf("Event for %s was handled by a workflow.", event.Name)
+						workflowHandled = true
+						// If a workflow handled it (even with an error), skip the config patterns
+						continue // Go to the next event
+					}
+				}
+
+				// 2. If no workflow handled it, try config patterns
+				if !workflowHandled {
+					log.Debugf("Event for %s not handled by workflow, trying config patterns.", event.Name)
+					d.organizeFile(event.Name)
+				} else {
+					// This case should not be reached due to the 'continue' above, but included for clarity
+					log.Debugf("Skipping config patterns for %s as it was handled by a workflow.", event.Name)
+				}
 			}
 
 		case err, ok := <-d.watcher.Errors:
@@ -287,10 +279,11 @@ func (d *Daemon) processEvents() {
 
 // organizeFile processes a single file according to the rules
 func (d *Daemon) organizeFile(filePath string) {
-	log.Debugf("Organize task triggered for: %s", filePath)
+	log.Debugf("Attempting to organize file via config patterns: %s", filePath)
 
 	// Use OrganizeByPatterns which returns only an error
 	err := d.engine.OrganizeByPatterns([]string{filePath})
+	log.Debugf("Result from engine.OrganizeByPatterns for %s: error=%v", filePath, err)
 
 	// If error occurred during organization (including no pattern match implicitly? Check engine impl if needed)
 	if err != nil {
@@ -301,6 +294,7 @@ func (d *Daemon) organizeFile(filePath string) {
 			cb := d.callback
 			d.mutex.RUnlock()
 			// Pass empty destPath as organization failed or didn't happen
+			log.Debugf("Invoking callback for %s with error: %v", filePath, err)
 			cb(filePath, "", err)
 		}
 		return
@@ -321,6 +315,7 @@ func (d *Daemon) organizeFile(filePath string) {
 		d.mutex.RLock()
 		cb := d.callback
 		d.mutex.RUnlock()
+		log.Debugf("Invoking callback for %s with success (nil error)", filePath)
 		cb(filePath, "", nil) // Indicate success with nil error, empty dest path
 	}
 }

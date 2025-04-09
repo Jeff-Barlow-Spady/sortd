@@ -74,8 +74,7 @@ watch_mode:
 		cfg, err := config.LoadConfigFile(configPath)
 		require.NoError(t, err)
 
-		engine := organize.New()
-		engine.SetConfig(cfg)
+		engine := organize.NewWithConfig(cfg)
 
 		err = engine.OrganizeFile(testFile)
 		require.NoError(t, err)
