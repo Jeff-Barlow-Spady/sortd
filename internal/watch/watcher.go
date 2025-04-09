@@ -117,7 +117,7 @@ func (w *Watcher) Start() error {
 			case event, ok := <-w.fsWatcher.Events:
 				if !ok {
 					fmt.Fprintln(os.Stdout, "fsWatcher.Events channel closed") // Debug print
-					return // Channel closed
+					return                                                     // Channel closed
 				}
 
 				// Debug: Print raw event
@@ -160,14 +160,14 @@ func (w *Watcher) Start() error {
 			case err, ok := <-w.fsWatcher.Errors:
 				if !ok {
 					fmt.Fprintln(os.Stdout, "fsWatcher.Errors channel closed") // Debug print
-					return // Channel closed
+					return                                                     // Channel closed
 				}
 				// Use proper logging
 				fmt.Fprintf(os.Stderr, "fsnotify watcher error: %v\n", err)
 
 			case <-w.stopChan:
 				fmt.Fprintln(os.Stdout, "Watcher event loop received stop signal.") // Debug print
-				return // Exit goroutine
+				return                                                              // Exit goroutine
 			}
 		}
 	}()

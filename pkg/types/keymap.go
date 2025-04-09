@@ -24,15 +24,15 @@ type KeyMap struct {
 	ClearFilter  key.Binding
 
 	// Selection & Actions
-	Select        key.Binding // Select/deselect single item
-	SelectVisual  key.Binding // Start/adjust visual selection
-	SelectAll     key.Binding
+	Select         key.Binding // Select/deselect single item
+	SelectVisual   key.Binding // Start/adjust visual selection
+	SelectAll      key.Binding
 	ClearSelection key.Binding
-	Organize      key.Binding // Trigger organization
-	ToggleHidden  key.Binding
-	EnterCmdMode  key.Binding // Enter Command mode (:)
+	Organize       key.Binding // Trigger organization
+	ToggleHidden   key.Binding
+	EnterCmdMode   key.Binding // Enter Command mode (:)
 
 	// Command Mode Specific
-	ExecuteCmd key.Binding // Execute command (Enter)
+	ExecuteCmd  key.Binding // Execute command (Enter)
 	ExitCmdMode key.Binding // Exit Command mode (Esc)
 }

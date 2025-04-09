@@ -23,11 +23,11 @@ type KeyHandlerModel interface {
 	Mode() Mode // Assuming Mode is defined in types
 	CurrentDir() string
 	SelectedFiles() map[string]bool
-	ShowFullHelp() bool      // Added based on handler usage
+	ShowFullHelp() bool    // Added based on handler usage
 	CommandBuffer() string // Added based on handler usage
-	VisualMode() bool        // Added based on handler usage
-	ActiveView() ViewMode    // Added based on handler usage
-	StatusMsg() string       // Added based on handler usage
+	VisualMode() bool      // Added based on handler usage
+	ActiveView() ViewMode  // Added based on handler usage
+	StatusMsg() string     // Added based on handler usage
 
 	// State Setters & Actions
 	SetMode(Mode)
@@ -35,22 +35,22 @@ type KeyHandlerModel interface {
 	LoadDirectory(string) tea.Cmd
 	TriggerOrganizationCmd([]string) tea.Cmd
 	UpdateVisualSelection()
-	ToggleSelection()                              // Added based on handler usage
-	ClearSelection()                               // Added based on handler usage
-	SetList(list.Model)                          // Added based on handler usage
-	SetViewport(viewport.Model)                    // Added based on handler usage
-	SetHelp(help.Model)                            // Added based on handler usage
-	SetShowFullHelp(bool)                          // Added based on handler usage
-	SetCommandBuffer(string)                       // Added based on handler usage
-	SetVisualMode(bool)                            // Added based on handler usage
-	SetVisualStart(int)                          // Added based on handler usage
-	SetVisualEnd(int)                            // Added based on handler usage
-	SetCurrentDir(string)                          // Added based on handler usage
-	SetSelectedFiles(map[string]bool)              // Added based on handler usage
-	SetOrganizing(bool)                          // Added based on handler usage
-	SetLoading(bool)                             // Added based on handler usage
-	SetActiveView(ViewMode)                      // Added based on handler usage
-	UpdateViewportContent() // Added based on handler usage
+	ToggleSelection()                 // Added based on handler usage
+	ClearSelection()                  // Added based on handler usage
+	SetList(list.Model)               // Added based on handler usage
+	SetViewport(viewport.Model)       // Added based on handler usage
+	SetHelp(help.Model)               // Added based on handler usage
+	SetShowFullHelp(bool)             // Added based on handler usage
+	SetCommandBuffer(string)          // Added based on handler usage
+	SetVisualMode(bool)               // Added based on handler usage
+	SetVisualStart(int)               // Added based on handler usage
+	SetVisualEnd(int)                 // Added based on handler usage
+	SetCurrentDir(string)             // Added based on handler usage
+	SetSelectedFiles(map[string]bool) // Added based on handler usage
+	SetOrganizing(bool)               // Added based on handler usage
+	SetLoading(bool)                  // Added based on handler usage
+	SetActiveView(ViewMode)           // Added based on handler usage
+	UpdateViewportContent()           // Added based on handler usage
 
 	// --- Potentially needed methods (Add if handlers require them) ---
 	// GetOrganizePaths() []string // Maybe replace with direct SelectedFiles access?

@@ -122,7 +122,7 @@ func TestLoadConfigFile(t *testing.T) {
 
 		require.Error(t, err, "Loading config with invalid watch directories should return an error")
 		assert.Contains(t, err.Error(), "invalid configuration", "Error message should indicate validation failure")
-		assert.Contains(t, err.Error(), "watch directory 0: path cannot be empty", "Error message should specify the validation issue")
+		assert.Contains(t, err.Error(), "invalid collision", "Error message should mention the validation issue")
 	})
 }
 

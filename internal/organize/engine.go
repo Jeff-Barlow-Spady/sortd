@@ -2,10 +2,12 @@ package organize
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"sortd/internal/config"
 	"sortd/internal/log"
@@ -90,6 +92,11 @@ func (e *Engine) SetDryRun(dryRun bool) {
 	e.dryRun = dryRun
 }
 
+// IsDryRun returns whether the engine is in dry run mode
+func (e *Engine) IsDryRun() bool {
+	return e.dryRun
+}
+
 // AddPattern adds a new organization pattern
 func (e *Engine) AddPattern(pattern types.Pattern) {
 	e.patterns = append(e.patterns, pattern)
@@ -105,7 +112,9 @@ func (e *Engine) findDestination(filename string) (string, bool) {
 			continue
 		}
 
-		return pattern.Target, true
+		// Construct the full destination path relative to the source file's directory
+		sourceDir := filepath.Dir(filename)
+		return filepath.Join(sourceDir, pattern.Target), true
 	}
 	return "", false
 }
@@ -138,76 +147,133 @@ func (e *Engine) MoveFile(src, dest string) error {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	// --- Collision Handling ---
-	collisionStrategy := e.collision // Get from engine config
-	if _, err := os.Stat(cleanDest); err == nil {
-		// Destination exists, handle collision
-		log.Warn("Destination file %s already exists. Handling collision with strategy: %s", cleanDest, collisionStrategy)
-		switch collisionStrategy {
-		case "skip":
-			log.Info("Skipping move for %s due to collision (strategy: skip)", cleanSrc)
-			return nil // Not an error, just skipped
-		case "overwrite":
-			log.Warn("Overwriting %s (strategy: overwrite)", cleanDest)
-			// Proceed to rename
-		case "rename":
-			originalDest := cleanDest
-			counter := 1
-			for {
-				ext := filepath.Ext(originalDest)
-				base := strings.TrimSuffix(originalDest, ext)
-				newName := fmt.Sprintf("%s_(%d)%s", base, counter, ext)
-				if _, err := os.Stat(newName); os.IsNotExist(err) {
-					cleanDest = newName // Found a non-existent name
-					log.Info("Renaming destination to %s due to collision (strategy: rename)", cleanDest)
-					break
-				}
-				counter++
-				if counter > 1000 { // Safety break
-					return fmt.Errorf("failed to find unique name for %s after 1000 attempts", originalDest)
-				}
-			}
-			// Proceed to rename with the new cleanDest
-		case "ask":
-			// TODO: Implement interactive 'ask' functionality. Requires CLI interaction.
-			// For now, treat 'ask' like 'skip'
-			log.Warn("Collision strategy 'ask' not implemented, treating as 'skip'.")
-			return nil
-		default:
-			return fmt.Errorf("unknown collision strategy: %s", collisionStrategy)
-		}
-	} else if !os.IsNotExist(err) {
-		// Error other than "does not exist" when checking destination
-		return fmt.Errorf("error checking destination %s: %w", cleanDest, err)
-	}
-	// Destination does not exist or collision handled (overwrite/rename)
+	// Lock for thread safety when checking and potentially modifying destination
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
-	// Lock for thread safety (should this be around the whole operation?)
-	// e.mu.Lock()
-	// defer e.mu.Unlock()
-	// TODO: Review locking strategy for potential race conditions, especially with 'rename'
-
+	// Check for dry run mode first
 	if e.dryRun {
 		log.Info("Would move %s -> %s", src, cleanDest)
 		return nil
 	}
 
-	// --- Backup Logic (Optional) ---
-	if e.backup {
-		// TODO: Implement backup logic if enabled
-		log.Debug("Backup logic not implemented.")
+	// Collision handling
+	finalDest, err := e.handleCollision(cleanSrc, cleanDest)
+	if err != nil {
+		return err
+	}
+	// If finalDest is empty, it means we're skipping the move
+	if finalDest == "" {
+		return nil
 	}
 
-	// --- Move the file ---
-	log.Debug("Attempting to move %s to %s", cleanSrc, cleanDest)
-	if err := os.Rename(cleanSrc, cleanDest); err != nil {
+	// Create backup if needed
+	if e.backup {
+		if err := e.createBackup(finalDest); err != nil {
+			return fmt.Errorf("backup failed: %w", err)
+		}
+	}
+
+	// Move the file
+	log.Debug("Moving %s to %s", cleanSrc, finalDest)
+	if err := os.Rename(cleanSrc, finalDest); err != nil {
 		return fmt.Errorf("failed to move file: %w", err)
 	}
 
-	// Record the move (Consider if locking is needed here)
-	// e.files[cleanDest] = types.FileInfo{ ... }
-	log.Info("Moved %s -> %s", src, cleanDest)
+	log.Info("Moved %s -> %s", src, finalDest)
+	return nil
+}
 
+// handleCollision implements collision resolution strategies.
+// It returns the final destination path and an error if any.
+// If the file should be skipped, it returns an empty string and nil error.
+func (e *Engine) handleCollision(src, dest string) (string, error) {
+	// Check if destination already exists
+	_, err := os.Stat(dest)
+	if os.IsNotExist(err) {
+		// No collision, use dest as is
+		return dest, nil
+	}
+	if err != nil {
+		// Some other error occurred
+		return "", fmt.Errorf("error checking destination %s: %w", dest, err)
+	}
+
+	// Handle collision based on strategy
+	log.Warn("Destination file %s already exists. Handling collision with strategy: %s", dest, e.collision)
+
+	switch e.collision {
+	case "skip":
+		log.Info("Skipping move for %s due to collision (strategy: skip)", src)
+		return "", nil // Empty string signals skip
+
+	case "overwrite":
+		log.Warn("Overwriting %s (strategy: overwrite)", dest)
+		return dest, nil // Return original dest for overwriting
+
+	case "rename":
+		// Find a new name by incrementing counter
+		return e.findUniqueDestName(dest)
+
+	case "ask":
+		// For now, skip when ask is specified
+		log.Warn("Collision strategy 'ask' not implemented, treating as 'skip'")
+		return "", nil
+
+	default:
+		return "", fmt.Errorf("unknown collision strategy: %s", e.collision)
+	}
+}
+
+// findUniqueDestName finds a unique filename by adding counter to the basename
+func (e *Engine) findUniqueDestName(originalPath string) (string, error) {
+	ext := filepath.Ext(originalPath)
+	base := strings.TrimSuffix(originalPath, ext)
+
+	for counter := 1; counter <= 1000; counter++ {
+		newName := fmt.Sprintf("%s_(%d)%s", base, counter, ext)
+
+		if _, err := os.Stat(newName); os.IsNotExist(err) {
+			log.Info("Renaming destination to %s due to collision (strategy: rename)", newName)
+			return newName, nil
+		}
+	}
+
+	return "", fmt.Errorf("failed to find unique name for %s after 1000 attempts", originalPath)
+}
+
+// createBackup creates a backup of the destination file if it exists
+func (e *Engine) createBackup(dest string) error {
+	// Check if file exists first
+	_, err := os.Stat(dest)
+	if os.IsNotExist(err) {
+		// Nothing to backup
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	// Create backup with timestamp
+	backupPath := fmt.Sprintf("%s.bak.%d", dest, time.Now().Unix())
+	srcFile, err := os.Open(dest)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	destFile, err := os.Create(backupPath)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, srcFile)
+	if err != nil {
+		return err
+	}
+
+	log.Info("Created backup: %s", backupPath)
 	return nil
 }
 
@@ -275,32 +341,41 @@ func (e *Engine) OrganizeDirectory(directory string) ([]types.OrganizeResult, er
 		// Get full file path
 		filePath := filepath.Join(directory, entry.Name())
 
-		// Find destination using patterns
-		destDir, found := e.findDestination(filePath)
-		if !found {
-			// Skip files that don't match any pattern
-			continue
+		// For each file, check all patterns
+		for _, pattern := range e.patterns {
+			// Check glob pattern
+			matched, err := filepath.Match(pattern.Match, entry.Name())
+			if err != nil || !matched {
+				continue
+			}
+
+			// Create destination path
+			// Here we need to handle the case where pattern.Target is an absolute path
+			var destPath string
+			if filepath.IsAbs(pattern.Target) {
+				destPath = filepath.Join(pattern.Target, entry.Name())
+			} else {
+				destPath = filepath.Join(directory, pattern.Target, entry.Name())
+			}
+
+			// Create result object
+			result := types.OrganizeResult{
+				SourcePath:      filePath,
+				DestinationPath: destPath,
+			}
+
+			// Try to move the file
+			err = e.MoveFile(filePath, destPath)
+			if err != nil {
+				result.Error = err
+			} else {
+				result.Moved = !e.dryRun
+			}
+
+			// Add to results and break out of the pattern loop
+			results = append(results, result)
+			break
 		}
-
-		// Build destination path
-		destPath := filepath.Join(destDir, entry.Name())
-
-		// Create result object
-		result := types.OrganizeResult{
-			SourcePath:      filePath,
-			DestinationPath: destPath,
-		}
-
-		// Try to move the file
-		err := e.MoveFile(filePath, destPath)
-		if err != nil {
-			result.Error = err
-		} else {
-			result.Moved = !e.dryRun
-		}
-
-		// Add to results
-		results = append(results, result)
 	}
 
 	return results, nil

@@ -7,7 +7,6 @@ import (
 	"sort"
 	"sortd/internal/analysis"
 	"sortd/internal/organize"
-	"sortd/internal/tui"
 	"sortd/internal/watch"
 
 	"sortd/internal/config"
@@ -15,7 +14,6 @@ import (
 
 	"sortd/cmd/sortd/cli"
 
-	tea "github.com/charmbracelet/bubbletea"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -40,7 +38,7 @@ func main() {
 	// Add commands that are only defined in main.go
 	rootCmd.AddCommand(analyzeCmd())
 	rootCmd.AddCommand(organizeCmd())
-	rootCmd.AddCommand(tuiCmd())
+	// rootCmd.AddCommand(tuiCmd())
 	rootCmd.AddCommand(guiCmd())
 	rootCmd.AddCommand(watchCmd())
 	rootCmd.AddCommand(daemonCmd)
@@ -263,26 +261,26 @@ func analyzeCmd() *cobra.Command {
 	return cmd
 }
 
-// tuiCmd represents the TUI command
-func tuiCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "tui",
-		Short: "Start the terminal user interface",
-		Long:  `Start the terminal user interface for interactive file organization.`,
-		Run: func(cmd *cobra.Command, args []string) {
-			// Create and run the TUI with the version
-			m := tui.New(version)
-			// Initialize Bubble Tea program WITHOUT alt screen for potentially better compatibility in non-TTY environments
-			p := tea.NewProgram(m)
-			if _, err := p.Run(); err != nil {
-				fmt.Printf("Error running TUI: %v\n", err)
-				os.Exit(1)
-			}
-		},
-	}
+// tuiCmd is deprecated and disabled
+// func tuiCmd() *cobra.Command {
+// 	cmd := &cobra.Command{
+// 		Use:   "tui",
+// 		Short: "Start the terminal user interface",
+// 		Long:  `Start the terminal user interface for interactive file organization.`,
+// 		Run: func(cmd *cobra.Command, args []string) {
+// 			// Create and run the TUI with the version
+// 			m := tui.New(version)
+// 			// Initialize Bubble Tea program WITHOUT alt screen for potentially better compatibility in non-TTY environments
+// 			p := tea.NewProgram(m)
+// 			if _, err := p.Run(); err != nil {
+// 				fmt.Printf("Error running TUI: %v\n", err)
+// 				os.Exit(1)
+// 			}
+// 		},
+// 	}
 
-	return cmd
-}
+// 	return cmd
+// }
 
 // watchCmd creates a command for watch mode
 func watchCmd() *cobra.Command {

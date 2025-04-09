@@ -5,6 +5,6 @@ type ViewMode int
 
 const (
 	ViewList ViewMode = iota
-	ViewTree // Example for future use
+	ViewTree          // Example for future use
 	// Add other views as needed
 )

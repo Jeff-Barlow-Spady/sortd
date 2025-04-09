@@ -4,7 +4,6 @@ go 1.23
 
 require (
 	fyne.io/fyne/v2 v2.5.5
-	github.com/alecthomas/assert v1.0.0
 	github.com/charmbracelet/bubbles v0.20.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gobwas/glob v0.2.3
@@ -12,12 +11,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 )
 
-require (
-	github.com/alecthomas/colour v0.1.0 // indirect
-	github.com/alecthomas/repr v0.0.0-20210801044451-80ca428c5142 // indirect
-	github.com/kr/text v0.2.0 // indirect
-	github.com/sergi/go-diff v1.2.0 // indirect
-)
+require github.com/kr/text v0.2.0 // indirect
 
 require (
 	fyne.io/systray v1.11.0 // indirect
@@ -66,7 +60,7 @@ require (
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.4
-	github.com/charmbracelet/lipgloss v1.0.0
+	github.com/charmbracelet/lipgloss v1.0.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1

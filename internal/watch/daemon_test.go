@@ -44,7 +44,7 @@ func TestDaemon_BasicFileMove(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.WatchDirectories = []string{watchDir}
 	cfg.Organize.Patterns = []types.Pattern{
-		{Match: "*.txt", Target: destDir},
+		{Match: "*.txt", Target: "../destdir"},
 	}
 	cfg.Settings.CreateDirs = true // Important for the test
 	cfg.Settings.DryRun = false    // Ensure files are actually moved
@@ -139,7 +139,7 @@ actions:
 	cfg := &config.Config{}
 	cfg.WatchDirectories = []string{watchDir}
 	cfg.Organize.Patterns = []types.Pattern{
-		{Match: "*.txt", Target: destDir},
+		{Match: "*.txt", Target: "../destdir"},
 	}
 	cfg.Settings.CreateDirs = true
 	cfg.Settings.DryRun = false

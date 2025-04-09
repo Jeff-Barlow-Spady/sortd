@@ -17,6 +17,14 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
+// WizardStep represents a single step in the wizard
+type WizardStep struct {
+	title       string
+	description string
+	content     fyne.CanvasObject
+	onNext      func() bool // Function to execute when moving to the next step, returns true if valid
+}
+
 // WorkflowWizard provides a step-by-step interface for creating workflows
 type WorkflowWizard struct {
 	app           *App
@@ -86,7 +94,7 @@ func NewWorkflowWizard(app *App) *WorkflowWizard {
 	})
 
 	// Create content container
-	w.contentContainer = container.NewMax()
+	w.contentContainer = container.NewStack()
 
 	// Create visualization preview with padding
 	w.visualPreview = container.NewVBox()
