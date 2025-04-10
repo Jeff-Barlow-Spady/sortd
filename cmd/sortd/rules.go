@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sortd/internal/config"
 	"strconv"
 	"strings"
 
@@ -61,7 +60,7 @@ func newRulesAddCmd() *cobra.Command {
 						Target:  target,
 					})
 
-					if err := config.SaveConfig(cfg); err != nil {
+					if err := cfg.Save(); err != nil {
 						fmt.Println(errorText(fmt.Sprintf("Error saving rule: %v", err)))
 						return
 					}
@@ -145,7 +144,7 @@ func newRulesAddCmd() *cobra.Command {
 					Target:  target,
 				})
 
-				if err := config.SaveConfig(cfg); err != nil {
+				if err := cfg.Save(); err != nil {
 					fmt.Println(errorText(fmt.Sprintf("Error saving rule: %v", err)))
 					return
 				}
@@ -238,7 +237,7 @@ func newRulesRemoveCmd() *cobra.Command {
 			cfg.Rules = append(cfg.Rules[:ruleToRemove], cfg.Rules[ruleToRemove+1:]...)
 
 			// Save config
-			if err := config.SaveConfig(cfg); err != nil {
+			if err := cfg.Save(); err != nil {
 				fmt.Println(errorText(fmt.Sprintf("Error saving config: %v", err)))
 				return
 			}

@@ -14,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -35,6 +36,7 @@ type WorkflowWizard struct {
 	conditionType string
 	actionType    string
 	stepContent   fyne.CanvasObject
+	steps         []WizardStep // All wizard steps
 
 	// Navigation buttons
 	nextButton   *widget.Button
@@ -44,9 +46,16 @@ type WorkflowWizard struct {
 
 	// Container for steps
 	contentContainer *fyne.Container
+	stepIndicator    *widget.Label
 
 	// Workflow visualization
 	visualPreview *fyne.Container
+
+	// Edit mode flag
+	isEditMode bool
+
+	// Update progress function
+	updateStepProgress func()
 }
 
 // NewWorkflowWizard creates a new workflow creation wizard
@@ -72,25 +81,43 @@ func NewWorkflowWizard(app *App) *WorkflowWizard {
 	// Set up the wizard window
 	w.window.Resize(fyne.NewSize(950, 650))
 
+	// Set up step indicator
+	w.stepIndicator = widget.NewLabelWithStyle("Step 1 of 5", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+
 	// Create navigation buttons
-	w.backButton = widget.NewButton("Back", func() {
+	w.backButton = widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), func() {
 		if w.currentStep > 0 {
 			w.currentStep--
 			w.updateStepContent()
 		}
 	})
 
-	w.nextButton = widget.NewButton("Next", func() {
+	w.nextButton = widget.NewButtonWithIcon("Next", theme.NavigateNextIcon(), func() {
+		// Run validation check for current step if available
+		if w.currentStep < len(w.steps) && w.steps[w.currentStep].onNext != nil {
+			if !w.steps[w.currentStep].onNext() {
+				// Validation failed, stay on current step
+				return
+			}
+		}
 		w.currentStep++
 		w.updateStepContent()
 	})
 
-	w.doneButton = widget.NewButton("Finish", func() {
+	w.doneButton = widget.NewButtonWithIcon("Finish", theme.ConfirmIcon(), func() {
 		w.saveWorkflow()
 	})
 
-	w.cancelButton = widget.NewButton("Cancel", func() {
-		w.window.Close()
+	w.cancelButton = widget.NewButtonWithIcon("Cancel", theme.CancelIcon(), func() {
+		// Confirm cancellation with unsaved changes
+		dialog.ShowConfirm("Cancel Workflow Creation",
+			"Are you sure you want to cancel? Any unsaved changes will be lost.",
+			func(confirmed bool) {
+				if confirmed {
+					w.window.Close()
+				}
+			},
+			w.window)
 	})
 
 	// Create content container
@@ -98,6 +125,49 @@ func NewWorkflowWizard(app *App) *WorkflowWizard {
 
 	// Create visualization preview with padding
 	w.visualPreview = container.NewVBox()
+
+	// Define all wizard steps
+	w.steps = []WizardStep{
+		{
+			title:       "Basic Information",
+			description: "Enter the general information about this workflow",
+			onNext: func() bool {
+				// Validate name not empty
+				if strings.TrimSpace(w.workflowData.Name) == "" {
+					dialog.ShowError(fmt.Errorf("workflow name cannot be empty"), w.window)
+					return false
+				}
+				return true
+			},
+		},
+		{
+			title:       "Triggers",
+			description: "Configure what will trigger this workflow",
+			onNext:      func() bool { return true }, // Always valid
+		},
+		{
+			title:       "Conditions",
+			description: "Add conditions to further refine when this workflow runs",
+			onNext:      func() bool { return true }, // Always valid
+		},
+		{
+			title:       "Actions",
+			description: "Define what actions will be taken when triggered",
+			onNext: func() bool {
+				// Must have at least one action
+				if len(w.workflowData.Actions) == 0 {
+					dialog.ShowError(fmt.Errorf("workflow must have at least one action"), w.window)
+					return false
+				}
+				return true
+			},
+		},
+		{
+			title:       "Review",
+			description: "Review and finalize your workflow",
+			onNext:      func() bool { return true }, // Always valid
+		},
+	}
 
 	// Initial layout setup
 	w.updateStepContent()
@@ -120,26 +190,117 @@ func NewWorkflowWizard(app *App) *WorkflowWizard {
 		scrollContainer, // The scroll gets all remaining space
 	)
 
+	// Progress indicator with step number
+	progressBar := widget.NewProgressBar()
+	progressBar.Min = 0
+	progressBar.Max = float64(len(w.steps) - 1)
+	progressBar.SetValue(0)
+
 	// Create the split container with a 0.65 offset (65% left, 35% right)
 	splitContainer := container.NewHSplit(
-		w.contentContainer,
+		container.NewBorder(
+			container.NewVBox(
+				w.stepIndicator,
+				progressBar,
+			),
+			nil,
+			nil,
+			nil,
+			w.contentContainer,
+		),
 		previewContainer,
 	)
 	splitContainer.Offset = 0.65
+
+	// Update the progress indicator when step changes
+	w.updateStepProgress = func() {
+		w.stepIndicator.SetText(fmt.Sprintf("Step %d of %d: %s",
+			w.currentStep+1,
+			len(w.steps),
+			w.steps[w.currentStep].title))
+		progressBar.SetValue(float64(w.currentStep))
+	}
+	w.updateStepProgress()
+
+	// Create a toolbar for actions
+	toolbar := widget.NewToolbar(
+		widget.NewToolbarAction(theme.ContentAddIcon(), func() {
+			// Add action button - functionality depends on current step
+			if w.currentStep == 2 {
+				// Add condition
+				w.addNewCondition()
+			} else if w.currentStep == 3 {
+				// Add action
+				w.addNewAction()
+			}
+		}),
+		widget.NewToolbarAction(theme.ContentClearIcon(), func() {
+			// Clear button - functionality depends on current step
+			if w.currentStep == 2 && len(w.workflowData.Conditions) > 0 {
+				// Clear all conditions
+				dialog.ShowConfirm("Clear All Conditions",
+					"Are you sure you want to remove all conditions?",
+					func(confirmed bool) {
+						if confirmed {
+							w.workflowData.Conditions = []types.Condition{}
+							w.updateStepContent()
+						}
+					},
+					w.window)
+			} else if w.currentStep == 3 && len(w.workflowData.Actions) > 0 {
+				// Clear all actions
+				dialog.ShowConfirm("Clear All Actions",
+					"Are you sure you want to remove all actions?",
+					func(confirmed bool) {
+						if confirmed {
+							w.workflowData.Actions = []types.Action{}
+							w.updateStepContent()
+						}
+					},
+					w.window)
+			}
+		}),
+		widget.NewToolbarSpacer(),
+		widget.NewToolbarAction(theme.HelpIcon(), func() {
+			// Show help for current step
+			helpText := "No help available for this step."
+			switch w.currentStep {
+			case 0:
+				helpText = "Enter a unique name and description for your workflow. " +
+					"The priority determines the order in which workflows are processed."
+			case 1:
+				helpText = "Select what event will trigger this workflow. " +
+					"For example, a new file being created or modified."
+			case 2:
+				helpText = "Add conditions to narrow down when the workflow will run. " +
+					"For example, only run for certain file types or sizes."
+			case 3:
+				helpText = "Add actions that will be performed when the workflow runs. " +
+					"You must add at least one action."
+			case 4:
+				helpText = "Review all settings before finalizing. " +
+					"You can go back to any step to make changes."
+			}
+			dialog.ShowInformation("Help: "+w.steps[w.currentStep].title, helpText, w.window)
+		}),
+	)
 
 	// Set the window content
 	w.window.SetContent(
 		container.NewBorder(
 			nil, // Top
-			container.NewHBox(
-				layout.NewSpacer(),
-				w.cancelButton,
-				w.backButton,
-				w.nextButton,
-				w.doneButton,
+			container.NewBorder(
+				nil, nil, nil, nil,
+				container.NewHBox(
+					layout.NewSpacer(),
+					w.cancelButton,
+					w.backButton,
+					w.nextButton,
+					w.doneButton,
+				),
 			), // Bottom
-			nil, // Left
-			nil, // Right
+			toolbar, // Left
+			nil,     // Right
 			splitContainer,
 		),
 	)
@@ -164,10 +325,13 @@ func (w *WorkflowWizard) updateStepContent() {
 	}
 
 	// Last step shows done instead of next
-	if w.currentStep == 4 {
+	if w.currentStep == len(w.steps)-1 {
 		w.nextButton.Hide()
 		w.doneButton.Show()
 	}
+
+	// Update step indicator
+	w.updateStepProgress()
 
 	// Update content based on step
 	switch w.currentStep {
@@ -189,56 +353,75 @@ func (w *WorkflowWizard) updateStepContent() {
 
 // createBasicInfoStep creates the basic workflow information step
 func (w *WorkflowWizard) createBasicInfoStep() fyne.CanvasObject {
-	title := widget.NewLabelWithStyle("Step 1: Basic Information", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	title := widget.NewLabelWithStyle(
+		w.steps[w.currentStep].description,
+		fyne.TextAlignLeading,
+		fyne.TextStyle{Italic: true})
 
 	nameEntry := widget.NewEntry()
 	nameEntry.SetText(w.workflowData.Name)
 	nameEntry.OnChanged = func(value string) {
 		w.workflowData.Name = value
+		w.updateVisualization()
 	}
 
 	idEntry := widget.NewEntry()
 	idEntry.SetText(w.workflowData.ID)
 	idEntry.OnChanged = func(value string) {
-		// Replace spaces and special chars with hyphens
-		value = strings.ToLower(value)
-		value = strings.ReplaceAll(value, " ", "-")
 		w.workflowData.ID = value
-		idEntry.SetText(value) // Update in case we modified it
 	}
 
 	descEntry := widget.NewMultiLineEntry()
+	descEntry.SetPlaceHolder("Enter a description of this workflow")
 	descEntry.SetText(w.workflowData.Description)
 	descEntry.OnChanged = func(value string) {
 		w.workflowData.Description = value
+		w.updateVisualization()
 	}
 
 	enabledCheck := widget.NewCheck("Enabled", func(value bool) {
 		w.workflowData.Enabled = value
+		w.updateVisualization()
 	})
 	enabledCheck.SetChecked(w.workflowData.Enabled)
 
 	prioritySlider := widget.NewSlider(1, 10)
 	prioritySlider.Value = float64(w.workflowData.Priority)
+	priorityValue := widget.NewLabel(fmt.Sprintf("%d", w.workflowData.Priority))
+
 	prioritySlider.OnChanged = func(value float64) {
 		w.workflowData.Priority = int(value)
-	}
-	priorityLabel := widget.NewLabel(fmt.Sprintf("Priority: %d", w.workflowData.Priority))
-	prioritySlider.OnChanged = func(value float64) {
-		w.workflowData.Priority = int(value)
-		priorityLabel.SetText(fmt.Sprintf("Priority: %d", w.workflowData.Priority))
+		priorityValue.SetText(fmt.Sprintf("%d", w.workflowData.Priority))
+		w.updateVisualization()
 	}
 
-	return container.NewVBox(
-		title,
-		widget.NewForm(
-			widget.NewFormItem("Workflow Name", nameEntry),
-			widget.NewFormItem("Workflow ID", idEntry),
-			widget.NewFormItem("Description", descEntry),
+	// Container for priority with both slider and value
+	priorityContainer := container.NewBorder(
+		nil, nil,
+		widget.NewLabel("Priority: "), priorityValue,
+		prioritySlider)
+
+	form := widget.NewForm(
+		widget.NewFormItem("Name", nameEntry),
+		widget.NewFormItem("ID", idEntry),
+		widget.NewFormItem("Description", descEntry),
+		widget.NewFormItem("Status", enabledCheck),
+		widget.NewFormItem("Priority", priorityContainer),
+	)
+
+	// Help text for priority
+	helpText := widget.NewRichTextFromMarkdown("**Workflow Priority**\n\nHigher priority (10) workflows are processed before lower priority (1) workflows.")
+
+	return container.NewBorder(
+		container.NewVBox(
+			title,
+			widget.NewSeparator(),
 		),
-		container.NewHBox(enabledCheck),
-		priorityLabel,
-		prioritySlider,
+		container.NewVBox(
+			widget.NewCard("Help", "", helpText),
+		),
+		nil, nil,
+		form,
 	)
 }
 
@@ -688,9 +871,11 @@ func (w *WorkflowWizard) createActionsStep() fyne.CanvasObject {
 		container.NewVBox(
 			widget.NewSeparator(),
 			widget.NewLabel("Add New Action:"),
-			widget.NewForm(
-				widget.NewFormItem("Action Type", actionTypeSelect),
-				widget.NewFormItem("Target", container.NewBorder(nil, nil, nil, browseButton, targetEntry)),
+			container.NewGridWithColumns(2,
+				widget.NewForm(
+					widget.NewFormItem("Action Type", actionTypeSelect),
+					widget.NewFormItem("Target", container.NewBorder(nil, nil, nil, browseButton, targetEntry)),
+				),
 			),
 			container.NewVBox(
 				createDirCheck,
@@ -976,4 +1161,222 @@ func (w *WorkflowWizard) updateVisualization() {
 	}
 
 	w.visualPreview.Refresh()
+}
+
+// addNewCondition opens a dialog to add a new condition
+func (w *WorkflowWizard) addNewCondition() {
+	// Create a dialog for adding a new condition
+	conditionTypeSelect := widget.NewSelect([]string{
+		"File Size",
+		"File Type",
+		"File Name",
+		"File Age",
+		"Custom",
+	}, nil)
+	conditionTypeSelect.PlaceHolder = "Select condition type..."
+
+	fieldEntry := widget.NewEntry()
+	fieldEntry.SetPlaceHolder("Field name (e.g., size, extension)")
+
+	operatorOptions := []string{
+		"Equals",
+		"Not Equals",
+		"Contains",
+		"Starts With",
+		"Ends With",
+		"Greater Than",
+		"Less Than",
+		"Matches Regex",
+	}
+
+	operatorSelect := widget.NewSelect(operatorOptions, nil)
+	operatorSelect.PlaceHolder = "Select operator..."
+
+	valueEntry := widget.NewEntry()
+	valueEntry.SetPlaceHolder("Value")
+
+	unitEntry := widget.NewEntry()
+	unitEntry.SetPlaceHolder("Unit (e.g., MB, KB, days)")
+
+	// Create a form for the dialog
+	form := widget.NewForm(
+		widget.NewFormItem("Condition Type", conditionTypeSelect),
+		widget.NewFormItem("Field", fieldEntry),
+		widget.NewFormItem("Operator", operatorSelect),
+		widget.NewFormItem("Value", valueEntry),
+		widget.NewFormItem("Unit (Optional)", unitEntry),
+	)
+
+	// Create a custom confirmation dialog
+	dialog.ShowCustomConfirm("Add New Condition", "Add", "Cancel", form, func(add bool) {
+		if add {
+			// Create new condition based on form values
+			if conditionTypeSelect.Selected == "" {
+				w.app.ShowError("Missing condition type", fmt.Errorf("please select a condition type"))
+				return
+			}
+
+			if operatorSelect.Selected == "" {
+				w.app.ShowError("Missing operator", fmt.Errorf("please select an operator"))
+				return
+			}
+
+			if valueEntry.Text == "" {
+				w.app.ShowError("Missing value", fmt.Errorf("please enter a value"))
+				return
+			}
+
+			// Map selected condition type to actual type
+			var condType types.ConditionType
+			switch conditionTypeSelect.Selected {
+			case "File Size":
+				condType = types.FileSizeCondition
+				if fieldEntry.Text == "" {
+					fieldEntry.SetText("size")
+				}
+			case "File Type":
+				condType = types.FileTypeCondition
+				if fieldEntry.Text == "" {
+					fieldEntry.SetText("type")
+				}
+			case "File Name":
+				condType = types.FileNameCondition
+				if fieldEntry.Text == "" {
+					fieldEntry.SetText("name")
+				}
+			case "File Age":
+				condType = types.FileAgeCondition
+				if fieldEntry.Text == "" {
+					fieldEntry.SetText("age")
+				}
+			case "Custom":
+				condType = types.CustomCondition
+			default:
+				w.app.ShowError("Invalid condition type", fmt.Errorf("please select a valid condition type"))
+				return
+			}
+
+			// Convert selected operator to OperatorType
+			var operator types.OperatorType
+			switch operatorSelect.Selected {
+			case "Equals":
+				operator = types.Equals
+			case "Not Equals":
+				operator = types.NotEquals
+			case "Contains":
+				operator = types.Contains
+			case "Starts With":
+				operator = types.StartsWith
+			case "Ends With":
+				operator = types.EndsWith
+			case "Greater Than":
+				operator = types.GreaterThan
+			case "Less Than":
+				operator = types.LessThan
+			case "Matches Regex":
+				operator = types.MatchesRegex
+			default:
+				w.app.ShowError("Invalid operator", fmt.Errorf("please select a valid operator"))
+				return
+			}
+
+			newCondition := types.Condition{
+				Type:      condType,
+				Field:     fieldEntry.Text,
+				Operator:  operator,
+				Value:     valueEntry.Text,
+				ValueUnit: unitEntry.Text,
+			}
+
+			// Add the condition and update the UI
+			w.workflowData.Conditions = append(w.workflowData.Conditions, newCondition)
+			w.updateStepContent()
+			w.updateVisualization()
+			w.app.ShowInfo("The condition has been added successfully.")
+		}
+	}, w.window)
+}
+
+// addNewAction opens a dialog to add a new action
+func (w *WorkflowWizard) addNewAction() {
+	// Create a dialog for adding a new action
+	actionTypeSelect := widget.NewSelect([]string{
+		"Move",
+		"Copy",
+		"Rename",
+		"Tag",
+		"Delete",
+		"Execute",
+	}, nil)
+	actionTypeSelect.PlaceHolder = "Select action type..."
+
+	targetEntry := widget.NewEntry()
+	targetEntry.SetPlaceHolder("Target path (e.g., /path/to/destination)")
+
+	// Options map entries
+	formatEntry := widget.NewEntry()
+	formatEntry.SetPlaceHolder("Format (e.g., {date}/{extension}/{name})")
+
+	commandEntry := widget.NewEntry()
+	commandEntry.SetPlaceHolder("Command to execute")
+
+	// Create a form for the dialog
+	form := widget.NewForm(
+		widget.NewFormItem("Action Type", actionTypeSelect),
+		widget.NewFormItem("Target", targetEntry),
+		widget.NewFormItem("Format", formatEntry),
+		widget.NewFormItem("Command", commandEntry),
+	)
+
+	// Create a custom confirmation dialog
+	dialog.ShowCustomConfirm("Add New Action", "Add", "Cancel", form, func(add bool) {
+		if add {
+			// Validate inputs
+			if actionTypeSelect.Selected == "" {
+				w.app.ShowError("Missing action type", fmt.Errorf("please select an action type"))
+				return
+			}
+
+			// Create new action based on form values
+			var actionType types.ActionType
+			switch actionTypeSelect.Selected {
+			case "Move":
+				actionType = types.MoveAction
+			case "Copy":
+				actionType = types.CopyAction
+			case "Rename":
+				actionType = types.RenameAction
+			case "Tag":
+				actionType = types.TagAction
+			case "Delete":
+				actionType = types.DeleteAction
+			case "Execute":
+				actionType = types.ExecuteAction
+			default:
+				w.app.ShowError("Invalid action type", fmt.Errorf("please select a valid action type"))
+				return
+			}
+
+			// Create options map
+			options := make(map[string]string)
+			if formatEntry.Text != "" {
+				options["format"] = formatEntry.Text
+			}
+			if commandEntry.Text != "" {
+				options["command"] = commandEntry.Text
+			}
+
+			newAction := types.Action{
+				Type:    actionType,
+				Target:  targetEntry.Text,
+				Options: options,
+			}
+
+			// Add the action and update the UI
+			w.workflowData.Actions = append(w.workflowData.Actions, newAction)
+			w.updateStepContent()
+			w.updateVisualization()
+			w.app.ShowInfo("The action has been added successfully.")
+		}
+	}, w.window)
 }

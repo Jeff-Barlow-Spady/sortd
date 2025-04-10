@@ -32,20 +32,22 @@ type Config struct {
 		// Note: User notification logic (e.g., debouncing, specific triggers)
 		// is handled separately by the watch daemon/GUI, not via a config interval.
 	} `yaml:"watch_mode"`
-	WatchDirectories []string `yaml:"watch_directories"` // List of directories to monitor
+	WatchDirectories []string         `yaml:"watch_directories"` // List of directories to monitor
+	Workflows        []types.Workflow `yaml:"workflows"`         // User-defined workflows
 }
 
 // Settings contains global configuration settings
 type Settings struct {
-	DryRun         bool   `yaml:"dry_run"`         // Run in dry run mode
-	CreateDirs     bool   `yaml:"create_dirs"`     // Create target directories if they don't exist
-	Confirm        bool   `yaml:"confirm"`         // Require confirmation before organizing files
-	MaxDepth       int    `yaml:"max_depth"`       // Maximum depth to search for files
-	FollowSymlinks bool   `yaml:"follow_symlinks"` // Follow symbolic links
-	IgnoreHidden   bool   `yaml:"ignore_hidden"`   // Ignore hidden files and directories
-	LogLevel       string `yaml:"log_level"`       // Log level (debug, info, warn, error)
-	Backup         bool   `yaml:"backup"`          // Create backups before moving
-	Collision      string `yaml:"collision"`       // Collision strategy: rename, skip, or ask
+	DryRun              bool   `yaml:"dry_run"`              // Run in dry run mode
+	CreateDirs          bool   `yaml:"create_dirs"`          // Create target directories if they don't exist
+	Confirm             bool   `yaml:"confirm"`              // Require confirmation before organizing files
+	MaxDepth            int    `yaml:"max_depth"`            // Maximum depth to search for files
+	FollowSymlinks      bool   `yaml:"follow_symlinks"`      // Follow symbolic links
+	IgnoreHidden        bool   `yaml:"ignore_hidden"`        // Ignore hidden files and directories
+	LogLevel            string `yaml:"log_level"`            // Log level (debug, info, warn, error)
+	Backup              bool   `yaml:"backup"`               // Create backups before moving
+	Collision           string `yaml:"collision"`            // Collision strategy: rename, skip, or ask
+	EnableNotifications bool   `yaml:"enable_notifications"` // Enable system notifications
 }
 
 // DaemonStatus represents the status of the watch daemon
@@ -128,15 +130,16 @@ func defaultConfig() *Config {
 
 	// Set default settings
 	cfg.Settings = Settings{
-		DryRun:         true,
-		CreateDirs:     true,
-		Confirm:        false,
-		MaxDepth:       10,
-		FollowSymlinks: false,
-		IgnoreHidden:   true,
-		LogLevel:       "info",
-		Backup:         false,
-		Collision:      "ask",
+		DryRun:              true,
+		CreateDirs:          true,
+		Confirm:             false,
+		MaxDepth:            10,
+		FollowSymlinks:      false,
+		IgnoreHidden:        true,
+		LogLevel:            "info",
+		Backup:              false,
+		Collision:           "ask",
+		EnableNotifications: false,
 	}
 
 	// Initialize directories struct
@@ -158,10 +161,10 @@ func defaultConfig() *Config {
 	return cfg
 }
 
-// SaveConfig saves the configuration to the default location.
+// Save saves the configuration to the default location.
 // Creates the config directory if it doesn't exist.
-func SaveConfig(cfg *Config) error {
-	if cfg == nil {
+func (c *Config) Save() error {
+	if c == nil {
 		return fmt.Errorf("nil config")
 	}
 
@@ -176,7 +179,7 @@ func SaveConfig(cfg *Config) error {
 	}
 
 	configPath := filepath.Join(configDir, "config.yaml")
-	data, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
@@ -248,15 +251,16 @@ func NewTestConfig() *Config {
 		{Match: "*.jpg", Target: "images/"},
 	}
 	cfg.Settings = Settings{
-		DryRun:         false,
-		CreateDirs:     true,
-		Confirm:        false,
-		MaxDepth:       10,
-		FollowSymlinks: false,
-		IgnoreHidden:   true,
-		LogLevel:       "info",
-		Backup:         true,
-		Collision:      "rename",
+		DryRun:              false,
+		CreateDirs:          true,
+		Confirm:             false,
+		MaxDepth:            10,
+		FollowSymlinks:      false,
+		IgnoreHidden:        true,
+		LogLevel:            "info",
+		Backup:              true,
+		Collision:           "rename",
+		EnableNotifications: false,
 	}
 	return cfg
 }

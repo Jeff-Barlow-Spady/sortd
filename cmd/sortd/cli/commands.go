@@ -538,7 +538,7 @@ var SetupCmd = &cobra.Command{
 		}
 
 		// Save configuration
-		err := config.SaveConfig(cfg)
+		err := cfg.Save()
 		if err != nil {
 			PrintError(fmt.Sprintf("Error saving configuration: %v", err))
 			return

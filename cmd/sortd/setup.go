@@ -242,8 +242,8 @@ func NewSetupCmd() *cobra.Command {
 			os.MkdirAll(configDir, 0755)
 			configPath := filepath.Join(configDir, "config.yaml")
 
-			// The SaveConfig function only takes the config object
-			if err := config.SaveConfig(newConfig); err != nil {
+			// Save the configuration using the Save method
+			if err := newConfig.Save(); err != nil {
 				fmt.Printf(errorText("Error saving config: %v"), err)
 				os.Exit(1)
 			}
