@@ -318,24 +318,30 @@ func TestEngineWithComplexWorkflows(t *testing.T) {
 	err = os.WriteFile(newFile, []byte("new content"), 0644)
 	require.NoError(t, err, "Failed to create new file")
 
-	// Create config with patterns that would match workflow conditions
-	cfg := &config.Config{}
-	cfg.Organize.Patterns = []types.Pattern{
-		// Base pattern to catch all text files
-		{Match: "*.txt", Target: filepath.Join(destDir, "documents")},
-		// Special pattern for old files (could be a workflow with age condition)
-		{Match: "old.txt", Target: filepath.Join(destDir, "archive")},
-	}
-
-	// Create the engine
-	engine := NewWithConfig(cfg)
-
 	// Create destination directories
 	err = os.MkdirAll(filepath.Join(destDir, "documents"), 0755)
 	require.NoError(t, err, "Failed to create documents directory")
 
 	err = os.MkdirAll(filepath.Join(destDir, "archive"), 0755)
 	require.NoError(t, err, "Failed to create archive directory")
+
+	// Create config with absolute paths for destination directories
+	cfg := &config.Config{}
+	cfg.Settings.CreateDirs = true
+
+	// Use absolute paths for the patterns
+	archiveDir := filepath.Join(destDir, "archive")
+	documentsDir := filepath.Join(destDir, "documents")
+
+	cfg.Organize.Patterns = []types.Pattern{
+		// Special pattern for old files (matched first)
+		{Match: "old.txt", Target: archiveDir},
+		// Base pattern to catch all text files
+		{Match: "*.txt", Target: documentsDir},
+	}
+
+	// Create the engine
+	engine := NewWithConfig(cfg)
 
 	// Test organization with multiple patterns
 	err = engine.OrganizeByPatterns([]string{oldFile, newFile})

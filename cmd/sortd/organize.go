@@ -178,6 +178,11 @@ func organizeSingleFile(ctx context.Context, engine *organize.Engine, filePath s
 		engine.SetDryRun(true)
 	}
 
+	// Check for context cancellation
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("operation cancelled: %w", err)
+	}
+
 	if verbose {
 		fmt.Printf(" Processing single file: %s\n", filePath)
 
@@ -240,6 +245,11 @@ func organizeDirectory(ctx context.Context, engine *organize.Engine, dirPath str
 	// Set dry run mode if in test mode to prevent actual file modification
 	if os.Getenv("TESTMODE") == "true" {
 		engine.SetDryRun(true)
+	}
+
+	// Check for context cancellation
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("operation cancelled: %w", err)
 	}
 
 	fmt.Printf(" Organizing directory: %s\n", dirPath)
