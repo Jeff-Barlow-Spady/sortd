@@ -6,14 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // FileInfo represents analyzed file information
 type FileInfo struct {
-	Path        string   `json:"path"`
-	ContentType string   `json:"type"`
-	Size        int64    `json:"size"`
-	Tags        []string `json:"tags,omitempty"`
+	Path        string            `json:"path"`
+	ContentType string            `json:"type"`
+	Size        int64             `json:"size"`
+	ModTime     time.Time         `json:"mod_time,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // Name returns the base name of the file

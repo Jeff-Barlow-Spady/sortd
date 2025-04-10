@@ -22,7 +22,9 @@ func TestNewDaemon(t *testing.T) {
 		},
 	}
 
-	daemon, err := watch.NewDaemon(cfg)
+	// Use a temporary directory for workflows in this test to avoid interference
+	tmpWorkflowsDir := t.TempDir()
+	daemon, err := watch.NewDaemonWithWorkflowPath(cfg, tmpWorkflowsDir)
 	if err != nil {
 		t.Errorf("NewDaemon failed: %v", err)
 	}
@@ -49,8 +51,9 @@ func TestDaemon_BasicFileMove(t *testing.T) {
 	cfg.Settings.CreateDirs = true // Important for the test
 	cfg.Settings.DryRun = false    // Ensure files are actually moved
 
-	// 3. Initialize Daemon
-	daemon, err := watch.NewDaemon(cfg)
+	// 3. Initialize Daemon with an empty workflow directory
+	tmpWorkflowsDir := t.TempDir()
+	daemon, err := watch.NewDaemonWithWorkflowPath(cfg, tmpWorkflowsDir)
 	require.NoError(t, err, "NewDaemon should not return an error")
 	require.NotNil(t, daemon, "NewDaemon should not return a nil daemon")
 
@@ -77,7 +80,7 @@ func TestDaemon_BasicFileMove(t *testing.T) {
 	// Give fsnotify and the daemon goroutine time to process.
 	// This is a common challenge in testing async file watchers.
 	// A more robust approach might use the callback and channel (commented out above).
-	time.Sleep(200 * time.Millisecond) // Adjust timing as needed
+	time.Sleep(500 * time.Millisecond) // Increased wait time for worker pool
 
 	// 7. Check if file was moved
 	destFilePath := filepath.Join(destDir, testFileName)

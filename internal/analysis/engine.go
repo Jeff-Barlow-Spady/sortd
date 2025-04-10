@@ -1,38 +1,123 @@
 package analysis
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"sortd/internal/config"
-	"sortd/pkg/types"
+	"github.com/rwcarlsen/goexif/exif"
+	"github.com/rwcarlsen/goexif/mknote"
 
+	"sortd/internal/config"
 	serr "sortd/internal/errors"
 	log "sortd/internal/log"
+	"sortd/pkg/types"
 )
+
+// Analyzer defines the interface for file type specific analyzers
+type Analyzer interface {
+	// CanHandle checks if this analyzer is suitable for the given content type
+	CanHandle(contentType string) bool
+	// Analyze performs the specific analysis and updates FileInfo
+	Analyze(path string, info *types.FileInfo) (*types.FileInfo, error)
+}
+
+// --- Concrete Analyzer Implementations ---
+
+// ImageAnalyzer handles analysis for image files using EXIF data
+type ImageAnalyzer struct{}
+
+// CanHandle checks if the content type is an image type that might contain EXIF data
+func (a *ImageAnalyzer) CanHandle(contentType string) bool {
+	// Be somewhat lenient: check for image/ prefix, but also common types
+	// that might contain EXIF even if detected differently (e.g., octet-stream for some RAWs)
+	// This might need refinement based on observed file types.
+	return strings.HasPrefix(contentType, "image/") || contentType == "application/octet-stream"
+}
+
+// Analyze extracts EXIF metadata from image files
+func (a *ImageAnalyzer) Analyze(path string, info *types.FileInfo) (*types.FileInfo, error) {
+	logger := log.LogWithFields(log.F("path", path))
+
+	// Ensure base image tag is present
+	if !contains(info.Tags, "image") {
+		info.Tags = append(info.Tags, "image")
+	}
+	// Ensure metadata map is initialized
+	if info.Metadata == nil {
+		info.Metadata = make(map[string]string)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return info, fmt.Errorf("failed to open image file for exif: %w", err)
+	}
+	defer file.Close()
+
+	x, err := exif.Decode(file)
+	if err != nil {
+		logger.Debugf("No EXIF data found or failed to decode for %s: %v", path, err)
+		return info, nil // Not an error if no EXIF data
+	}
+
+	// Extract specific fields
+	if dt, err := x.Get(exif.DateTimeOriginal); err == nil {
+		dtStr, _ := dt.StringVal()
+		if dtStr != "" {
+			info.Metadata["DateTimeOriginal"] = dtStr
+			logger.Debugf("Found DateTimeOriginal: %s", dtStr)
+		}
+	}
+	if model, err := x.Get(exif.Model); err == nil {
+		modelStr, _ := model.StringVal()
+		if modelStr != "" {
+			info.Metadata["CameraModel"] = modelStr
+			logger.Debugf("Found CameraModel: %s", modelStr)
+		}
+	}
+
+	return info, nil
+}
+
+// TODO: Implement other analyzers like AudioAnalyzer, PDFAnalyzer here...
+
+// --- Engine Implementation ---
 
 // Engine handles file analysis and content detection
 type Engine struct {
-	config *config.Config
+	config    *config.Config
+	analyzers []Analyzer // List of registered analyzers
 }
 
 func (e *Engine) SetConfig(cfg *config.Config) {
 	e.config = cfg
 }
 
-// New creates a new Analysis Engine instance
+// registerAnalyzer adds an analyzer to the engine's list
+func (e *Engine) registerAnalyzer(analyzer Analyzer) {
+	if e.analyzers == nil {
+		e.analyzers = []Analyzer{}
+	}
+	e.analyzers = append(e.analyzers, analyzer)
+}
+
+// New creates a new Analysis Engine instance and registers default analyzers
 func New() *Engine {
-	return &Engine{}
+	exif.RegisterParsers(mknote.All...)
+	engine := &Engine{}
+	engine.registerAnalyzer(&ImageAnalyzer{}) // Register image analyzer
+	// TODO: Register other analyzers when implemented
+	return engine
 }
 
 // NewWithConfig creates a new Analysis Engine instance with config settings
 func NewWithConfig(cfg *config.Config) *Engine {
-	return &Engine{
-		config: cfg,
-	}
+	engine := New()
+	engine.config = cfg
+	return engine
 }
 
 // Scan performs basic file analysis
@@ -162,129 +247,47 @@ func (e *Engine) ScanDirectory(dir string) ([]*types.FileInfo, error) {
 	return results, nil
 }
 
-// Analyze performs additional analysis on a file
+// Analyze performs analysis by delegating to registered analyzers
 func (e *Engine) Analyze(path string) (*types.FileInfo, error) {
 	logger := log.LogWithFields(log.F("path", path))
-
-	// First do basic scanning
 	fileInfo, err := e.Scan(path)
 	if err != nil {
 		return nil, err
 	}
-
-	// Perform deeper content type specific analysis
-	switch {
-	case strings.HasPrefix(fileInfo.ContentType, "image/"):
-		result, err := e.analyzeImage(path, fileInfo)
-		if err != nil {
-			logger.With(log.F("error", err.Error())).Warn("Failed to analyze image metadata")
-		}
-		return result, nil
-
-	case strings.HasPrefix(fileInfo.ContentType, "audio/"):
-		result, err := e.analyzeAudio(path, fileInfo)
-		if err != nil {
-			logger.With(log.F("error", err.Error())).Warn("Failed to analyze audio metadata")
-		}
-		return result, nil
-
-	case strings.HasPrefix(fileInfo.ContentType, "video/"):
-		result, err := e.analyzeVideo(path, fileInfo)
-		if err != nil {
-			logger.With(log.F("error", err.Error())).Warn("Failed to analyze video metadata")
-		}
-		return result, nil
-
-	case strings.HasPrefix(fileInfo.ContentType, "text/"),
-		strings.HasPrefix(fileInfo.ContentType, "application/json"),
-		strings.HasPrefix(fileInfo.ContentType, "application/xml"),
-		strings.HasPrefix(fileInfo.ContentType, "application/yaml"):
-		result, err := e.analyzeText(path, fileInfo)
-		if err != nil {
-			logger.With(log.F("error", err.Error())).Warn("Failed to analyze text metadata")
-		}
-		return result, nil
-
-	case strings.HasPrefix(fileInfo.ContentType, "application/pdf"):
-		result, err := e.analyzePDF(path, fileInfo)
-		if err != nil {
-			logger.With(log.F("error", err.Error())).Warn("Failed to analyze PDF metadata")
-		}
-		return result, nil
-
-	default:
-		logger.Debug("No specific analyzer available for content type")
-		return fileInfo, nil
-	}
-}
-
-// analyzeImage extracts metadata from image files (EXIF)
-func (e *Engine) analyzeImage(path string, info *types.FileInfo) (*types.FileInfo, error) {
-	// This is a placeholder for actual image metadata extraction
-	// In a complete implementation, this would use libraries like github.com/rwcarlsen/goexif
-	// to extract EXIF data from images
-
-	// Add image-specific tags
-	info.Tags = append(info.Tags, "image")
-
-	// For now, just return the basic info
-	return info, nil
-}
-
-// analyzeAudio extracts metadata from audio files (ID3, etc)
-func (e *Engine) analyzeAudio(path string, info *types.FileInfo) (*types.FileInfo, error) {
-	// This is a placeholder for actual audio metadata extraction
-	// In a complete implementation, this would use libraries like github.com/dhowden/tag
-	// to extract audio metadata (ID3 tags, etc)
-
-	// Add audio-specific tags
-	info.Tags = append(info.Tags, "audio")
-
-	// For now, just return the basic info
-	return info, nil
-}
-
-// analyzeVideo extracts metadata from video files
-func (e *Engine) analyzeVideo(path string, info *types.FileInfo) (*types.FileInfo, error) {
-	// This is a placeholder for actual video metadata extraction
-	// In a complete implementation, this would use libraries or external tools
-	// to extract video metadata
-
-	// Add video-specific tags
-	info.Tags = append(info.Tags, "video")
-
-	// For now, just return the basic info
-	return info, nil
-}
-
-// analyzeText performs analysis on text-based files
-func (e *Engine) analyzeText(path string, info *types.FileInfo) (*types.FileInfo, error) {
-	// This is a placeholder for actual text content analysis
-	// In a complete implementation, this would examine file contents
-	// to extract meaningful information
-
-	// Add document tag if not present
-	if !contains(info.Tags, "document") {
-		info.Tags = append(info.Tags, "document")
+	if fileInfo.Metadata == nil {
+		fileInfo.Metadata = make(map[string]string)
 	}
 
-	// For now, just return the basic info
-	return info, nil
+	var analysisErr error
+	foundAnalyzer := false
+	for _, analyzer := range e.analyzers {
+		if analyzer.CanHandle(fileInfo.ContentType) {
+			foundAnalyzer = true
+			logger.Debugf("Using analyzer %T for content type %s", analyzer, fileInfo.ContentType)
+			fileInfo, analysisErr = analyzer.Analyze(path, fileInfo)
+			if analysisErr != nil {
+				logger.With(log.F("analyzer", fmt.Sprintf("%T", analyzer)), log.F("error", analysisErr.Error())).Warn("Analyzer failed, returning partial info")
+				return fileInfo, nil // Return info obtained so far even if analyzer fails
+			}
+			break
+		}
+	}
+
+	if !foundAnalyzer {
+		logger.Debugf("No specific analyzer registered for content type: %s", fileInfo.ContentType)
+	}
+
+	// General text analysis placeholder (Consider a TextAnalyzer struct)
+	if strings.HasPrefix(fileInfo.ContentType, "text/") {
+		if !contains(fileInfo.Tags, "document") {
+			fileInfo.Tags = append(fileInfo.Tags, "document")
+		}
+	}
+
+	return fileInfo, nil
 }
 
-// analyzePDF extracts metadata from PDF files
-func (e *Engine) analyzePDF(path string, info *types.FileInfo) (*types.FileInfo, error) {
-	// This is a placeholder for actual PDF metadata extraction
-	// In a complete implementation, this would use libraries like github.com/ledongthuc/pdf
-	// to extract PDF metadata
-
-	// Add PDF-specific tags
-	info.Tags = append(info.Tags, "document", "pdf")
-
-	// For now, just return the basic info
-	return info, nil
-}
-
+// contains helper function (keep for now, consider moving to utils later)
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -294,36 +297,4 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-func (e *Engine) detectContentType(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", serr.NewFileError("failed to open file for content type detection", path, serr.FileNotFound, err)
-		}
-		return "", serr.NewFileError("failed to open file for content type detection", path, serr.FileAccessDenied, err)
-	}
-	defer file.Close()
-
-	// Read first 512 bytes for detection
-	buffer := make([]byte, 512)
-	_, err = file.Read(buffer)
-	if err != nil && err != io.EOF {
-		return "", serr.NewFileError("failed to read file for content type detection", path, serr.FileOperationFailed, err)
-	}
-
-	// Use both net/http and file extension detection
-	contentType := http.DetectContentType(buffer)
-	ext := filepath.Ext(path)
-
-	// Override for known image types
-	if strings.HasPrefix(contentType, "application/octet-stream") {
-		switch ext {
-		case ".jpg", ".jpeg":
-			return "image/jpeg", nil
-		case ".png":
-			return "image/png", nil
-		}
-	}
-
-	return contentType, nil
-}
+// Removed old analyzeText, analyzeAudio, analyzeVideo, analyzePDF placeholders

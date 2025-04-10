@@ -34,43 +34,20 @@ func (e *Engine) OrganizeFile(path string) error {
 		return errors.NewConfigError("no config set", "engine", errors.ConfigNotSet, nil)
 	}
 
-	// Get file info
-	info, err := os.Stat(path)
+	// Delegate to OrganizeByPatterns for consistency
+	logger.Debug("Organizing single file using pattern engine")
+	err := e.OrganizeByPatterns([]string{path})
 	if err != nil {
-		return errors.NewFileError("failed to access file", path, errors.FileAccessDenied, err)
+		// OrganizeByPatterns already logs errors for individual files, but we might want
+		// to log the overall failure here if the wrapper returns an error.
+		logger.With(log.F("error", err)).Error("Failed to organize single file")
+		return err // Propagate the error from OrganizeByPatterns
 	}
 
-	// Find matching pattern
-	for _, pattern := range e.config.Organize.Patterns {
-		matched, err := filepath.Match(pattern.Match, info.Name())
-		if err != nil {
-			return errors.NewRuleError("invalid pattern", pattern.Match, errors.InvalidRule, err)
-		}
-		if matched {
-			// Create target directory if needed
-			targetDir := filepath.Join(filepath.Dir(path), pattern.Target)
-			if e.config.Settings.CreateDirs {
-				if err := os.MkdirAll(targetDir, 0755); err != nil {
-					return errors.NewFileError("failed to create directory", targetDir, errors.FileCreateFailed, err)
-				}
-			}
-
-			// Move file
-			newPath := filepath.Join(targetDir, info.Name())
-			if err := os.Rename(path, newPath); err != nil {
-				return errors.NewFileError("failed to move file", path, errors.FileOperationFailed, err)
-			}
-
-			logger.With(
-				log.F("destination", newPath),
-				log.F("pattern", pattern.Match),
-			).Info("File organized successfully")
-
-			return nil
-		}
-	}
-
-	logger.Debug("No matching pattern found for file")
+	// If OrganizeByPatterns returns nil, it means either the file was moved successfully
+	// or no matching pattern was found (which isn't an error for a single file call).
+	// The specific outcome (moved/no match) would already be logged by sub-calls.
+	logger.Debug("Single file organization attempt completed")
 	return nil
 }
 
@@ -177,22 +154,23 @@ func (e *Engine) MoveFile(src, dest string) error {
 		return errors.NewFileError("failed to create destination directory", destDir, errors.FileCreateFailed, err)
 	}
 
-	// Lock for thread safety when checking and potentially modifying destination
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	// Check for dry run mode first
 	if e.dryRun {
 		logger.Info("Would move file (dry run)")
 		return nil
 	}
 
-	// Collision handling
+	// Determine final destination path with collision handling
+	// This needs to be atomic with the actual move operation
+	e.mu.Lock()
 	finalDest, err := e.handleCollision(cleanSrc, cleanDest)
+	e.mu.Unlock()
+
 	if err != nil {
 		log.LogError(err, "Collision handling failed")
 		return err
 	}
+
 	// If finalDest is empty, it means we're skipping the move
 	if finalDest == "" {
 		logger.Info("Skipping file move due to collision handling")
@@ -341,62 +319,41 @@ func (e *Engine) OrganizeFiles(files []string, destDir string) error {
 func (e *Engine) OrganizeByPatterns(files []string) error {
 	logger := log.LogWithFields(log.F("file_count", len(files)))
 	logger.Info("Organizing files using patterns")
+	var firstError error // Keep track of the first error encountered
 
 	for _, file := range files {
 		if destDir, found := e.findDestination(file); found {
 			dest := filepath.Join(destDir, filepath.Base(file))
 			if err := e.MoveFile(file, dest); err != nil {
-				return errors.Wrapf(err, "failed to move %s", file)
+				wrappedErr := errors.Wrapf(err, "failed to move %s", file)
+				log.LogError(wrappedErr, "Error during pattern organization") // Log the specific error
+				if firstError == nil {
+					firstError = wrappedErr // Store the first error
+				}
+				// Continue processing other files even if one fails
+				continue
 			}
 		} else {
 			log.LogWithFields(log.F("file", file)).Debug("No pattern match for file")
 		}
 	}
-	return nil
+	// Return the first error encountered, if any
+	return firstError
 }
 
 // Add directory organization method
 func (e *Engine) OrganizeDir(dir string) ([]string, error) {
-	logger := log.LogWithFields(log.F("directory", dir))
+	results, err := e.OrganizeDirectory(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert the results to a simple list of organized files
 	var organized []string
-
-	// Check if directory exists
-	dirInfo, err := os.Stat(dir)
-	if err != nil {
-		return nil, errors.NewFileError("failed to access directory", dir, errors.FileAccessDenied, err)
-	}
-
-	if !dirInfo.IsDir() {
-		return nil, errors.NewFileError("path is not a directory", dir, errors.InvalidOperation, nil)
-	}
-
-	// Read directory contents
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, errors.NewFileError("failed to read directory", dir, errors.FileAccessDenied, err)
-	}
-
-	logger.With(log.F("file_count", len(entries))).Info("Organizing directory")
-
-	// Process each file
-	for _, entry := range entries {
-		// Skip directories
-		if entry.IsDir() {
-			continue
+	for _, result := range results {
+		if result.Error == nil && result.Moved {
+			organized = append(organized, result.SourcePath)
 		}
-
-		// Get full file path
-		filePath := filepath.Join(dir, entry.Name())
-
-		// Try to organize this file
-		err := e.OrganizeFile(filePath)
-		if err != nil {
-			log.LogError(err, "Failed to organize file")
-			continue
-		}
-
-		// Add to the list of organized files
-		organized = append(organized, filePath)
 	}
 
 	return organized, nil

@@ -52,6 +52,11 @@ type Daemon struct {
 
 	// Whether the daemon is running
 	running bool
+
+	// Event processing channel and workers
+	eventChan  chan string
+	workerWg   sync.WaitGroup
+	numWorkers int
 }
 
 // NewDaemon creates a new background file organization service
@@ -98,6 +103,8 @@ func NewDaemon(cfg *config.Config) (*Daemon, error) {
 		callback:            nil,
 		requireConfirmation: false,
 		running:             false,
+		eventChan:           make(chan string, 100), // Buffer for 100 events
+		numWorkers:          4,                      // Default to 4 workers
 	}, nil // Return nil error on success
 }
 
@@ -131,6 +138,12 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("no valid directories to watch")
 	}
 
+	// Start worker pool for file processing
+	for i := 0; i < d.numWorkers; i++ {
+		d.workerWg.Add(1)
+		go d.fileProcessWorker()
+	}
+
 	// Start processing file events from the single watcher
 	go d.processEvents()
 
@@ -150,8 +163,103 @@ func (d *Daemon) Stop() {
 	if err := d.watcher.Close(); err != nil {
 		log.Errorf("Error closing watcher: %v", err)
 	}
+
+	// Close the event channel to signal workers to stop
+	close(d.eventChan)
+
+	// Wait for all workers to finish
+	d.workerWg.Wait()
+
 	d.running = false
 	log.Info("Watch daemon stopped.")
+}
+
+// fileProcessWorker processes files from the event channel
+func (d *Daemon) fileProcessWorker() {
+	defer d.workerWg.Done()
+
+	for filePath := range d.eventChan {
+		// First try workflow processing
+		var workflowHandled bool = false
+		if d.workflowManager != nil {
+			// Create a minimal event to pass to the workflow manager
+			event := fsnotify.Event{
+				Name: filePath,
+				Op:   fsnotify.Create, // Treat as a create event
+			}
+
+			processed, wfErr := d.workflowManager.ProcessEvent(event)
+			if wfErr != nil {
+				log.Errorf("Error processing event with workflow manager for %s: %v", filePath, wfErr)
+				// Decide if error means we should still try patterns. For now, assume yes.
+			}
+			if processed {
+				log.Debugf("Event for %s was handled by a workflow.", filePath)
+				workflowHandled = true
+				// Explicitly skip pattern processing if workflow handled it
+				continue
+			}
+		}
+
+		// If no workflow handled it, try config patterns
+		if !workflowHandled {
+			log.Debugf("Event for %s not handled by workflow, trying config patterns.", filePath)
+			d.organizeFile(filePath)
+		}
+	}
+}
+
+// processEvents handles file modification events from the watcher
+func (d *Daemon) processEvents() {
+	for {
+		select {
+		case event, ok := <-d.watcher.Events:
+			if !ok {
+				log.Info("Watcher event channel closed.")
+				return // Exit goroutine if channel is closed
+			}
+
+			// Log the raw event for debugging
+			log.Debugf("Received fsnotify event: %s", event.String())
+
+			// We are primarily interested in Create and Write events for files
+			// Note: RENAMED files trigger REMOVE on old name, CREATE on new name.
+			// WRITE might occur multiple times for one save operation.
+			if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
+				// Check if it's a file (fsnotify doesn't guarantee IsDir reliably)
+				info, err := os.Stat(event.Name)
+				if err != nil {
+					// File might have been removed quickly after event, log and skip
+					log.Debugf("Failed to stat file from event %s: %v", event.Name, err)
+					continue
+				}
+				if info.IsDir() {
+					log.Debugf("Skipping directory event: %s", event.Name)
+					continue // Skip directories
+				}
+
+				// Update last activity time
+				d.mutex.Lock()
+				d.lastActivity = time.Now()
+				d.mutex.Unlock()
+
+				// Send file to worker pool for processing
+				select {
+				case d.eventChan <- event.Name:
+					log.Debugf("Queued event for processing: %s", event.Name)
+				default:
+					log.Warnf("Event channel full, dropping event for: %s", event.Name)
+				}
+			}
+
+		case err, ok := <-d.watcher.Errors:
+			if !ok {
+				log.Info("Watcher error channel closed.")
+				return // Exit goroutine if channel is closed
+			}
+			log.Errorf("Watcher error: %v", err)
+		}
+	}
 }
 
 // AddWatchDirectory adds a directory to be watched
@@ -204,79 +312,6 @@ func (d *Daemon) Status() DaemonStatus {
 	}
 }
 
-// processEvents handles file modification events from the watcher
-func (d *Daemon) processEvents() {
-	for {
-		select {
-		case event, ok := <-d.watcher.Events:
-			if !ok {
-				log.Info("Watcher event channel closed.")
-				return // Exit goroutine if channel is closed
-			}
-
-			// Log the raw event for debugging
-			log.Debugf("Received fsnotify event: %s", event.String())
-
-			// We are primarily interested in Create and Write events for files
-			// Note: RENAMED files trigger REMOVE on old name, CREATE on new name.
-			// WRITE might occur multiple times for one save operation.
-			if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
-				// Check if it's a file (fsnotify doesn't guarantee IsDir reliably)
-				info, err := os.Stat(event.Name)
-				if err != nil {
-					// File might have been removed quickly after event, log and skip
-					log.Debugf("Failed to stat file from event %s: %v", event.Name, err)
-					continue
-				}
-				if info.IsDir() {
-					log.Debugf("Skipping directory event: %s", event.Name)
-					continue // Skip directories
-				}
-
-				// Update last activity time
-				d.mutex.Lock()
-				d.lastActivity = time.Now()
-				d.mutex.Unlock()
-
-				// --- Event Processing Logic ---
-				log.Debugf("Processing event for: %s", event.Name)
-
-				// 1. Try processing with Workflow Manager first
-				var workflowHandled bool = false
-				if d.workflowManager != nil {
-					processed, wfErr := d.workflowManager.ProcessEvent(event)
-					if wfErr != nil {
-						// Log error from workflow execution but continue, as config might still match
-						log.Errorf("Error processing event with workflow manager for %s: %v", event.Name, wfErr)
-					}
-					if processed {
-						log.Debugf("Event for %s was handled by a workflow.", event.Name)
-						workflowHandled = true
-						// If a workflow handled it (even with an error), skip the config patterns
-						continue // Go to the next event
-					}
-				}
-
-				// 2. If no workflow handled it, try config patterns
-				if !workflowHandled {
-					log.Debugf("Event for %s not handled by workflow, trying config patterns.", event.Name)
-					d.organizeFile(event.Name)
-				} else {
-					// This case should not be reached due to the 'continue' above, but included for clarity
-					log.Debugf("Skipping config patterns for %s as it was handled by a workflow.", event.Name)
-				}
-			}
-
-		case err, ok := <-d.watcher.Errors:
-			if !ok {
-				log.Info("Watcher error channel closed.")
-				return // Exit goroutine if channel is closed
-			}
-			log.Errorf("Watcher error: %v", err)
-		}
-	}
-}
-
 // organizeFile processes a single file according to the rules
 func (d *Daemon) organizeFile(filePath string) {
 	log.Debugf("Attempting to organize file via config patterns: %s", filePath)
@@ -289,10 +324,10 @@ func (d *Daemon) organizeFile(filePath string) {
 	if err != nil {
 		log.Errorf("Error organizing file %s: %v", filePath, err)
 		// Execute callback with the error
-		if d.callback != nil {
-			d.mutex.RLock()
-			cb := d.callback
-			d.mutex.RUnlock()
+		d.mutex.RLock()
+		cb := d.callback
+		d.mutex.RUnlock()
+		if cb != nil {
 			// Pass empty destPath as organization failed or didn't happen
 			log.Debugf("Invoking callback for %s with error: %v", filePath, err)
 			cb(filePath, "", err)
@@ -311,10 +346,10 @@ func (d *Daemon) organizeFile(filePath string) {
 	// If a callback is registered, notify it of success (nil error)
 	// We don't know the exact destination path from OrganizeByPatterns easily.
 	// We could try to find it again, but for now, pass empty string.
-	if d.callback != nil {
-		d.mutex.RLock()
-		cb := d.callback
-		d.mutex.RUnlock()
+	d.mutex.RLock()
+	cb := d.callback
+	d.mutex.RUnlock()
+	if cb != nil {
 		log.Debugf("Invoking callback for %s with success (nil error)", filePath)
 		cb(filePath, "", nil) // Indicate success with nil error, empty dest path
 	}
@@ -378,5 +413,7 @@ func NewDaemonWithWorkflowPath(cfg *config.Config, workflowPath string) (*Daemon
 		callback:            nil,
 		requireConfirmation: false,
 		running:             false,
+		eventChan:           make(chan string, 100), // Buffer for 100 events
+		numWorkers:          4,                      // Default to 4 workers
 	}, nil
 }
