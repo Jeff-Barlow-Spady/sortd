@@ -1,0 +1,10 @@
+id: workflow-1744093431
+name: jeffinatly
+description: fuck-a-duck
+enabled: true
+trigger:
+    type: file_created
+actions:
+    - type: execute
+      target: echo "fuck-a-duck"
+priority: 5

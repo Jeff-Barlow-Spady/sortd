@@ -1,0 +1,30 @@
+organize:
+    patterns:
+        - match: '*.{jpg,jpeg,png,gif,bmp,tiff}'
+          target: Images
+        - match: '*.{zip,rar,tar,gz,7z}'
+          target: Archives
+settings:
+    dry_run: true
+    create_dirs: false
+    confirm: false
+    max_depth: 0
+    follow_symlinks: false
+    ignore_hidden: false
+    log_level: ""
+    backup: false
+    collision: ask
+directories:
+    default: /home/toasty/Downloads
+    watch:
+        - /home/Downloads
+rules:
+    - pattern: '*.jpg'
+      target: Photos/{{.Year}}/{{.Month}}
+    - pattern: '*.png'
+      target: Photos/{{.Year}}/{{.Month}}
+    - pattern: '*.gif'
+      target: Photos/{{.Year}}/{{.Month}}
+watch_mode:
+    enabled: true
+watch_directories: []
