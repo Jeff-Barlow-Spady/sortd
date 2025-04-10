@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"sortd/pkg/types"
 
@@ -16,12 +18,7 @@ type Config struct {
 	Organize struct {
 		Patterns []types.Pattern `yaml:"patterns"` // File organization patterns
 	} `yaml:"organize"`
-	Settings struct {
-		DryRun     bool   `yaml:"dry_run"`     // If true, simulate operations
-		CreateDirs bool   `yaml:"create_dirs"` // Create destination directories
-		Backup     bool   `yaml:"backup"`      // Create backups before moving
-		Collision  string `yaml:"collision"`   // Collision strategy: rename, skip, or ask
-	} `yaml:"settings"`
+	Settings    Settings `yaml:"settings"`
 	Directories struct {
 		Default string   `yaml:"default"` // Default working directory
 		Watch   []string `yaml:"watch"`   // Directories to watch
@@ -31,9 +28,34 @@ type Config struct {
 		Target  string `yaml:"target"`  // Target directory
 	} `yaml:"rules"`
 	WatchMode struct {
-		Enabled  bool `yaml:"enabled"`  // Enable watch mode
-		Interval int  `yaml:"interval"` // Watch interval in seconds
+		Enabled bool `yaml:"enabled"` // Enable watch mode using fsnotify for event detection.
+		// Note: User notification logic (e.g., debouncing, specific triggers)
+		// is handled separately by the watch daemon/GUI, not via a config interval.
 	} `yaml:"watch_mode"`
+	WatchDirectories []string         `yaml:"watch_directories"` // List of directories to monitor
+	Workflows        []types.Workflow `yaml:"workflows"`         // User-defined workflows
+}
+
+// Settings contains global configuration settings
+type Settings struct {
+	DryRun              bool   `yaml:"dry_run"`              // Run in dry run mode
+	CreateDirs          bool   `yaml:"create_dirs"`          // Create target directories if they don't exist
+	Confirm             bool   `yaml:"confirm"`              // Require confirmation before organizing files
+	MaxDepth            int    `yaml:"max_depth"`            // Maximum depth to search for files
+	FollowSymlinks      bool   `yaml:"follow_symlinks"`      // Follow symbolic links
+	IgnoreHidden        bool   `yaml:"ignore_hidden"`        // Ignore hidden files and directories
+	LogLevel            string `yaml:"log_level"`            // Log level (debug, info, warn, error)
+	Backup              bool   `yaml:"backup"`               // Create backups before moving
+	Collision           string `yaml:"collision"`            // Collision strategy: rename, skip, or ask
+	EnableNotifications bool   `yaml:"enable_notifications"` // Enable system notifications
+}
+
+// DaemonStatus represents the status of the watch daemon
+type DaemonStatus struct {
+	Running          bool
+	WatchDirectories []string
+	LastActivity     time.Time
+	FilesProcessed   int
 }
 
 // LoadConfig loads configuration from the default location
@@ -73,12 +95,7 @@ func LoadConfigFile(path string) (*Config, error) {
 	if len(tempCfg.Organize.Patterns) > 0 {
 		cfg.Organize.Patterns = tempCfg.Organize.Patterns
 	}
-	if tempCfg.Settings.Collision != "" {
-		cfg.Settings.Collision = tempCfg.Settings.Collision
-	}
-	cfg.Settings.DryRun = tempCfg.Settings.DryRun
-	cfg.Settings.CreateDirs = tempCfg.Settings.CreateDirs
-	cfg.Settings.Backup = tempCfg.Settings.Backup
+	cfg.Settings = tempCfg.Settings
 
 	if tempCfg.Directories.Default != "" {
 		cfg.Directories.Default = tempCfg.Directories.Default
@@ -90,10 +107,11 @@ func LoadConfigFile(path string) (*Config, error) {
 		cfg.Rules = tempCfg.Rules
 	}
 
-	cfg.WatchMode.Enabled = tempCfg.WatchMode.Enabled
-	if tempCfg.WatchMode.Interval > 0 {
-		cfg.WatchMode.Interval = tempCfg.WatchMode.Interval
+	if len(tempCfg.WatchDirectories) > 0 {
+		cfg.WatchDirectories = tempCfg.WatchDirectories
 	}
+
+	cfg.WatchMode.Enabled = tempCfg.WatchMode.Enabled
 
 	// Validate the final configuration
 	if err := cfg.Validate(); err != nil {
@@ -111,10 +129,18 @@ func defaultConfig() *Config {
 	cfg.Organize.Patterns = []types.Pattern{}
 
 	// Set default settings
-	cfg.Settings.DryRun = true     // Safe by default
-	cfg.Settings.CreateDirs = true // Create destination directories
-	cfg.Settings.Backup = false    // No backup by default
-	cfg.Settings.Collision = "ask" // Ask on collision by default
+	cfg.Settings = Settings{
+		DryRun:              true,
+		CreateDirs:          true,
+		Confirm:             false,
+		MaxDepth:            10,
+		FollowSymlinks:      false,
+		IgnoreHidden:        true,
+		LogLevel:            "info",
+		Backup:              false,
+		Collision:           "ask",
+		EnableNotifications: false,
+	}
 
 	// Initialize directories struct
 	cfg.Directories.Default = "." // Current directory by default
@@ -126,17 +152,19 @@ func defaultConfig() *Config {
 		Target  string `yaml:"target"`
 	}{}
 
+	// Initialize empty watch directories slice
+	cfg.WatchDirectories = []string{}
+
 	// Set default watch mode settings
 	cfg.WatchMode.Enabled = false
-	cfg.WatchMode.Interval = 5 // 5 seconds default interval
 
 	return cfg
 }
 
-// SaveConfig saves the configuration to the default location.
+// Save saves the configuration to the default location.
 // Creates the config directory if it doesn't exist.
-func SaveConfig(cfg *Config) error {
-	if cfg == nil {
+func (c *Config) Save() error {
+	if c == nil {
 		return fmt.Errorf("nil config")
 	}
 
@@ -151,7 +179,7 @@ func SaveConfig(cfg *Config) error {
 	}
 
 	configPath := filepath.Join(configDir, "config.yaml")
-	data, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
@@ -167,23 +195,18 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate collision setting
-	validCollisions := map[string]bool{"rename": true, "skip": true, "ask": true}
+	validCollisions := map[string]bool{"rename": true, "skip": true, "ask": true, "overwrite": true}
 	if !validCollisions[c.Settings.Collision] {
 		return fmt.Errorf("invalid collision setting: %s", c.Settings.Collision)
 	}
 
-	// Validate watch interval if watch mode is enabled
-	if c.WatchMode.Enabled && c.WatchMode.Interval < 1 {
-		return fmt.Errorf("watch interval must be >= 1 second")
-	}
-
 	// Validate patterns
 	for i, pattern := range c.Organize.Patterns {
-		if pattern.Match == "" {
-			return fmt.Errorf("pattern %d: match pattern is required", i)
+		if strings.TrimSpace(pattern.Match) == "" {
+			return fmt.Errorf("pattern %d: match pattern cannot be empty", i)
 		}
-		if pattern.Target == "" {
-			return fmt.Errorf("pattern %d: target directory is required", i)
+		if strings.TrimSpace(pattern.Target) == "" {
+			return fmt.Errorf("pattern %d: target directory cannot be empty", i)
 		}
 	}
 
@@ -210,6 +233,13 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate watch directories
+	for i, dir := range c.WatchDirectories {
+		if strings.TrimSpace(dir) == "" {
+			return fmt.Errorf("watch directory %d: path cannot be empty", i)
+		}
+	}
+
 	return nil
 }
 
@@ -220,11 +250,18 @@ func NewTestConfig() *Config {
 		{Match: "*.txt", Target: "documents/"},
 		{Match: "*.jpg", Target: "images/"},
 	}
-	cfg.Settings.DryRun = false
-	cfg.Settings.CreateDirs = true
-	cfg.Settings.Backup = true
-	cfg.Settings.Collision = "rename"
-	cfg.WatchMode.Interval = 5
+	cfg.Settings = Settings{
+		DryRun:              false,
+		CreateDirs:          true,
+		Confirm:             false,
+		MaxDepth:            10,
+		FollowSymlinks:      false,
+		IgnoreHidden:        true,
+		LogLevel:            "info",
+		Backup:              true,
+		Collision:           "rename",
+		EnableNotifications: false,
+	}
 	return cfg
 }
 

@@ -1,0 +1,38 @@
+id: "document-processor"
+name: "Document Processor"
+description: "Process documents based on content and size"
+enabled: true
+priority: 5
+
+trigger:
+  type: "FileCreated"
+  pattern: "*.{doc,docx,pdf,txt}"
+
+conditions:
+  - type: "FileCondition"
+    field: "size"
+    operator: "GreaterThan"
+    value: "1"
+    valueUnit: "MB"
+  - type: "FileCondition"
+    field: "name"
+    operator: "Contains"
+    value: "invoice"
+    caseSensitive: false
+
+actions:
+  - type: "CopyAction"
+    target: "/home/user/Documents/Invoices"
+    options:
+      createTargetDir: "true"
+
+  - type: "TagAction"
+    target: "invoice"
+    options:
+      addToMetadata: "true"
+
+  - type: "CommandAction"
+    command: "python3 /home/user/scripts/notify.py --file \"{{ .FilePath }}\" --type invoice"
+    options:
+      runAsynchronously: true
+      shell: "/bin/bash"

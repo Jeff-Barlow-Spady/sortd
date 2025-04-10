@@ -1,0 +1,28 @@
+id: "image-sorter"
+name: "Image File Sorter"
+description: "Automatically sorts image files into separate folders based on file type"
+enabled: true
+priority: 10
+
+trigger:
+  type: "FileCreated"
+  pattern: "*.{jpg,jpeg,png,gif,svg,webp}"
+
+conditions:
+  - type: "FileSizeCondition"
+    field: "size"
+    operator: "LessThan"
+    value: "10"
+    valueUnit: "MB"
+
+actions:
+  - type: "MoveAction"
+    target: "/home/user/Pictures/Sorted"
+    options:
+      overwrite: "false"
+      createTargetDir: "true"
+
+  - type: "TagAction"
+    target: "image"
+    options:
+      addToMetadata: "true"

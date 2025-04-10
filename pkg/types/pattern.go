@@ -1,11 +1,11 @@
 package types
 
-// Pattern defines rules for matching files
+// Pattern defines a rule for matching files and specifying their target directory.
+// It is used within the application's configuration.
 type Pattern struct {
-	Glob     string   `json:"glob"`     // e.g., "*.pdf"
-	Prefixes []string `json:"prefixes"` // e.g., ["invoice", "receipt"]
-	Suffixes []string `json:"suffixes"` // e.g., ["2024", "final"]
-	DestDir  string   `json:"dest_dir"` // destination directory for matched files
-	Match    string   `json:"match"`    // e.g., "*.pdf"
-	Target   string   `json:"target"`   // e.g., "documents/"
+	Match  string `yaml:"match"`  // Glob pattern to match filenames (e.g., "*.pdf", "report_*.docx").
+	Target string `yaml:"target"` // Target directory path where matched files should be moved (e.g., "Documents/Reports", "Images/Screenshots").
 }
+
+// Note: Removed redundant fields Glob, Prefixes, Suffixes, DestDir for clarity
+// and aligned struct tags with YAML configuration format.

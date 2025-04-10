@@ -1,0 +1,27 @@
+id: "document-processor"
+name: "Document Processor"
+description: "Process documents based on content and size"
+enabled: true
+priority: 5
+
+trigger:
+  type: "FileCreated"
+  pattern: "*.{pdf,txt,md}"
+
+conditions:
+  - type: "FileCondition"
+    field: "size"
+    operator: "GreaterThan"
+    value: "1"
+    valueUnit: "KB"
+
+actions:
+  - type: "CopyAction"
+    target: "/home/toasty/sortd_test_files/Documents_Processed"
+    options:
+      createTargetDir: "true"
+
+  - type: "TagAction"
+    target: "processed"
+    options:
+      addToMetadata: "true"

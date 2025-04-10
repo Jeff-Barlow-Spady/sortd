@@ -1,0 +1,49 @@
+# Binaries and executables
+sortd
+sortd-cli
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go specific
+vendor/
+*.test
+*.out
+*.prof
+*.trace
+go.work
+
+# Backup and deprecated files
+*.bak
+*/*.bak
+*/*/*.bak
+internal/.tui.bak/
+tests/.tui.bak/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary and backup files
+tmp/
+*.tmp
+*.swp
+*.swo
+*~
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+
+# Build and test artifacts
+/dist/
+/build/
+/_output/
