@@ -39,12 +39,8 @@ func selectFilesInteractive(files []string) []string {
 		displayFiles = append(displayFiles, filepath.Base(file))
 	}
 
-	// Convert displayFiles to arguments for Gum
-	gumArgs := []string{"choose", "--no-limit"}
-	gumArgs = append(gumArgs, displayFiles...)
-
-	// Run Gum with the arguments
-	selections := runGum(gumArgs...)
+	// Use the dedicated multi-choice function
+	selections := runGumMultiChoose(displayFiles...)
 
 	// Find the actual paths from the selections
 	var selectedFiles []string
@@ -76,10 +72,11 @@ func printOrganizePlan(organizer *organize.Engine, files []string) {
 // NewOrganizeCmd creates the organize command
 func NewOrganizeCmd() *cobra.Command {
 	var (
-		dryRun    bool
-		directory string
-		verbose   bool
-		recursive bool
+		dryRun         bool
+		directory      string
+		verbose        bool
+		recursive      bool
+		nonInteractive bool
 	)
 
 	cmd := &cobra.Command{
@@ -88,6 +85,11 @@ func NewOrganizeCmd() *cobra.Command {
 		Long:  `Organize files according to your rules, with a fun interactive interface.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			// Set non-interactive mode in environment for consistent access across functions
+			if nonInteractive {
+				os.Setenv("SORTD_NON_INTERACTIVE", "true")
+			}
 
 			// Determine target path
 			targetPath, err := determineTargetPath(args, directory)
@@ -128,6 +130,7 @@ func NewOrganizeCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&directory, "directory", "d", "", "Directory to organize (overrides positional argument)")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "Recursively organize subdirectories")
+	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Run in non-interactive mode (no user prompts)")
 
 	return cmd
 }
@@ -247,10 +250,12 @@ func organizeDirectory(ctx context.Context, engine *organize.Engine, dirPath str
 
 	fmt.Printf(" Found %d files to organize\n", len(files))
 
-	// Allow interactive selection if not in test mode
-	if os.Getenv("TESTMODE") != "true" && !recursive {
+	// Allow interactive selection if not in test mode or non-interactive mode
+	if os.Getenv("TESTMODE") != "true" && !isNonInteractive() && !recursive {
 		files = selectFilesInteractive(files)
 		fmt.Printf(" Selected %d files to organize\n", len(files))
+	} else if isNonInteractive() {
+		fmt.Println(" Running in non-interactive mode, processing all files")
 	}
 
 	// Check for dry run
