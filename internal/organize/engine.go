@@ -104,16 +104,14 @@ func (e *Engine) findDestination(filename string) (string, bool) {
 			continue
 		}
 
-		// Construct the full destination path relative to the source file's directory
-		sourceDir := filepath.Dir(filename)
-		destination := filepath.Join(sourceDir, pattern.Target)
-
+		// Return the pattern target as is - path joining will be handled in the calling function
+		// This allows proper handling of both absolute and relative paths
 		logger.With(
 			log.F("pattern", pattern.Match),
-			log.F("destination", destination),
+			log.F("target", pattern.Target),
 		).Debug("Pattern matched")
 
-		return destination, true
+		return pattern.Target, true
 	}
 
 	logger.Debug("No matching pattern found")
@@ -148,10 +146,22 @@ func (e *Engine) MoveFile(src, dest string) error {
 		return errors.NewFileError("cannot move directory as file", cleanSrc, errors.InvalidOperation, nil)
 	}
 
-	// Ensure destination directory exists before checking destination file
+	// Check if destination directory exists
 	destDir := filepath.Dir(cleanDest)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return errors.NewFileError("failed to create destination directory", destDir, errors.FileCreateFailed, err)
+	if _, err := os.Stat(destDir); os.IsNotExist(err) {
+		// If createDirs is false, return an error
+		if !e.createDirs {
+			return errors.NewFileError("destination directory does not exist", destDir, errors.FileAccessDenied, nil)
+		}
+
+		// Create directory if createDirs is true
+		if !e.dryRun {
+			if err := os.MkdirAll(destDir, 0755); err != nil {
+				return errors.NewFileError("failed to create destination directory", destDir, errors.FileCreateFailed, err)
+			}
+		}
+	} else if err != nil {
+		return errors.NewFileError("error checking destination directory", destDir, errors.FileAccessDenied, err)
 	}
 
 	// Check for dry run mode first
@@ -178,9 +188,15 @@ func (e *Engine) MoveFile(src, dest string) error {
 	}
 
 	// Create backup if needed
+	// Check if the destination file exists before moving/overwriting
 	if e.backup {
-		if err := e.createBackup(finalDest); err != nil {
-			return errors.Wrap(err, "backup failed")
+		// Check if destination file exists directly, rather than relying on finalDest path
+		// which may have been renamed by collision handling
+		if _, err := os.Stat(finalDest); err == nil {
+			// File exists, create backup
+			if err := e.createBackup(finalDest); err != nil {
+				return errors.Wrap(err, "backup failed")
+			}
 		}
 	}
 
@@ -218,7 +234,14 @@ func (e *Engine) handleCollision(src, dest string) (string, error) {
 	// Handle collision based on strategy
 	logger.Warn("Destination file already exists, handling collision")
 
-	switch e.collision {
+	// Use default strategy if none is specified
+	collisionStrategy := e.collision
+	if collisionStrategy == "" {
+		collisionStrategy = "skip" // Use skip as the default
+		logger.Info("Using default collision strategy: skip")
+	}
+
+	switch collisionStrategy {
 	case "skip":
 		logger.Info("Skipping move due to collision")
 		return "", nil // Empty string signals skip
@@ -237,7 +260,7 @@ func (e *Engine) handleCollision(src, dest string) (string, error) {
 		return "", nil
 
 	default:
-		return "", errors.NewConfigError("unknown collision strategy", e.collision, errors.InvalidConfig, nil)
+		return "", errors.NewConfigError("unknown collision strategy: "+collisionStrategy, collisionStrategy, errors.InvalidConfig, nil)
 	}
 }
 
@@ -275,8 +298,35 @@ func (e *Engine) createBackup(dest string) error {
 		return err
 	}
 
-	// Create backup with timestamp
-	backupPath := fmt.Sprintf("%s.bak.%d", dest, time.Now().Unix())
+	// Create backup directory if it doesn't exist
+	backupDir := filepath.Dir(dest)
+	if err := os.MkdirAll(backupDir, 0755); err != nil {
+		return errors.NewFileError("failed to create backup directory", backupDir, errors.FileCreateFailed, err)
+	}
+
+	// Create backup with timestamp and nanosecond precision for uniqueness
+	timestamp := time.Now().UnixNano() / int64(time.Millisecond)
+	baseBackupPath := fmt.Sprintf("%s.bak.%d", dest, timestamp)
+	backupPath := baseBackupPath
+
+	// Check if the backup path already exists and add counter if needed
+	counter := 1
+	for {
+		_, err := os.Stat(backupPath)
+		if os.IsNotExist(err) {
+			break // Found a unique name
+		}
+
+		// Add counter to ensure uniqueness
+		backupPath = fmt.Sprintf("%s_%d", baseBackupPath, counter)
+		counter++
+
+		// Safety check to prevent infinite loop
+		if counter > 1000 {
+			return errors.New("couldn't find a unique backup name after 1000 attempts")
+		}
+	}
+
 	srcFile, err := os.Open(dest)
 	if err != nil {
 		return err
@@ -323,7 +373,15 @@ func (e *Engine) OrganizeByPatterns(files []string) error {
 
 	for _, file := range files {
 		if destDir, found := e.findDestination(file); found {
-			dest := filepath.Join(destDir, filepath.Base(file))
+			// Construct proper destination path - use absolute path if destDir is absolute
+			var dest string
+			if filepath.IsAbs(destDir) {
+				dest = filepath.Join(destDir, filepath.Base(file))
+			} else {
+				// For relative paths, join with the source file's directory
+				dest = filepath.Join(filepath.Dir(file), destDir, filepath.Base(file))
+			}
+
 			if err := e.MoveFile(file, dest); err != nil {
 				wrappedErr := errors.Wrapf(err, "failed to move %s", file)
 				log.LogError(wrappedErr, "Error during pattern organization") // Log the specific error
@@ -400,12 +458,13 @@ func (e *Engine) OrganizeDirectory(directory string) ([]types.OrganizeResult, er
 				continue
 			}
 
-			// Create destination path
-			// Here we need to handle the case where pattern.Target is an absolute path
+			// Create destination path, handling both absolute and relative paths
 			var destPath string
 			if filepath.IsAbs(pattern.Target) {
+				// If target is absolute, use it directly
 				destPath = filepath.Join(pattern.Target, entry.Name())
 			} else {
+				// If target is relative, join with the source directory
 				destPath = filepath.Join(directory, pattern.Target, entry.Name())
 			}
 

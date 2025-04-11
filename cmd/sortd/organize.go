@@ -130,7 +130,7 @@ func NewOrganizeCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&directory, "directory", "d", "", "Directory to organize (overrides positional argument)")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
 	cmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "Recursively organize subdirectories")
-	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Run in non-interactive mode (no user prompts)")
+	cmd.Flags().BoolVarP(&nonInteractive, "non-interactive", "N", false, "Run in non-interactive mode (no user prompts)")
 
 	return cmd
 }
@@ -173,6 +173,16 @@ func determineTargetPath(args []string, flagDirectory string) (string, error) {
 
 // organizeSingleFile organizes a single file according to configured patterns
 func organizeSingleFile(ctx context.Context, engine *organize.Engine, filePath string, verbose bool) error {
+	// Set dry run mode if in test mode to prevent actual file modification
+	if os.Getenv("TESTMODE") == "true" {
+		engine.SetDryRun(true)
+	}
+
+	// Check for context cancellation
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("operation cancelled: %w", err)
+	}
+
 	if verbose {
 		fmt.Printf(" Processing single file: %s\n", filePath)
 
@@ -232,6 +242,16 @@ func organizeSingleFile(ctx context.Context, engine *organize.Engine, filePath s
 
 // organizeDirectory organizes all files in a directory
 func organizeDirectory(ctx context.Context, engine *organize.Engine, dirPath string, recursive bool, verbose bool) error {
+	// Set dry run mode if in test mode to prevent actual file modification
+	if os.Getenv("TESTMODE") == "true" {
+		engine.SetDryRun(true)
+	}
+
+	// Check for context cancellation
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("operation cancelled: %w", err)
+	}
+
 	fmt.Printf(" Organizing directory: %s\n", dirPath)
 
 	// Find files to organize
