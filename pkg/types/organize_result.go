@@ -7,4 +7,3 @@ type OrganizeResult struct {
 	Moved           bool   `json:"moved"`
 	Error           error  `json:"error,omitempty"`
 }
-

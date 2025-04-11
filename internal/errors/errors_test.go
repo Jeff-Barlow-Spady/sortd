@@ -173,4 +173,3 @@ func TestErrorChains(t *testing.T) {
 	assert.True(t, IsInvalidConfig(ruleErr))
 	assert.True(t, IsInvalidRule(ruleErr))
 }
-
