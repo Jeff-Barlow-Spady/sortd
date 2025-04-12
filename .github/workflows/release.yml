@@ -6,40 +6,9 @@ on:
       - 'v*'
 
 jobs:
-  create-release:
-    name: Create Release
+  build-and-release:
+    name: Build and Release
     runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
-
-  build-and-upload:
-    name: Build and Upload
-    needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact_name: sortd
-            asset_name: sortd-linux-amd64
-          - os: macos-latest
-            artifact_name: sortd
-            asset_name: sortd-macos-amd64
-          - os: windows-latest
-            artifact_name: sortd.exe
-            asset_name: sortd-windows-amd64.exe
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -47,18 +16,42 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.20'
-          cache: true
+          go-version: '1.23'
 
-      - name: Build
-        run: go build -v -o ${{ matrix.artifact_name }} ./cmd/sortd
+      - name: Get version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+      - name: Build Linux binary
+        run: |
+          go build -o sortd-${{ env.VERSION }}-linux ./cmd/sortd
+          chmod +x sortd-${{ env.VERSION }}-linux
+          tar -czf sortd-${{ env.VERSION }}-linux.tar.gz sortd-${{ env.VERSION }}-linux
+
+      - name: Build Windows binary (No GUI)
+        run: |
+          # Using 'nogui' build tag to avoid OpenGL cross-compilation issues
+          GOOS=windows GOARCH=amd64 go build -tags nogui -o sortd-${{ env.VERSION }}-windows.exe ./cmd/sortd
+          zip sortd-${{ env.VERSION }}-windows.zip sortd-${{ env.VERSION }}-windows.exe
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            sortd-${{ env.VERSION }}-linux.tar.gz
+            sortd-${{ env.VERSION }}-windows.zip
+          name: Release ${{ env.VERSION }}
+          body: |
+            ## Sortd ${{ env.VERSION }}
+
+            ### Platform Support
+            - Linux: Full functionality including GUI
+            - Windows: Command-line interface only (GUI disabled)
+
+            The Windows binary is built with GUI disabled due to cross-compilation limitations.
+            For a GUI-enabled Windows version, please build from source on Windows.
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.artifact_name }}
-          asset_name: ${{ matrix.asset_name }}
-          asset_content_type: application/octet-stream

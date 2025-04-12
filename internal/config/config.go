@@ -41,6 +41,7 @@ type Settings struct {
 	DryRun              bool   `yaml:"dry_run"`              // Run in dry run mode
 	CreateDirs          bool   `yaml:"create_dirs"`          // Create target directories if they don't exist
 	Confirm             bool   `yaml:"confirm"`              // Require confirmation before organizing files
+	NonInteractive      bool   `yaml:"non_interactive"`      // Run in non-interactive mode (no prompts)
 	MaxDepth            int    `yaml:"max_depth"`            // Maximum depth to search for files
 	FollowSymlinks      bool   `yaml:"follow_symlinks"`      // Follow symbolic links
 	IgnoreHidden        bool   `yaml:"ignore_hidden"`        // Ignore hidden files and directories
@@ -133,6 +134,7 @@ func defaultConfig() *Config {
 		DryRun:              true,
 		CreateDirs:          true,
 		Confirm:             false,
+		NonInteractive:      false,
 		MaxDepth:            10,
 		FollowSymlinks:      false,
 		IgnoreHidden:        true,

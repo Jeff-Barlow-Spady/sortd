@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"sortd/internal/errors"
 	"sortd/pkg/types"
 
 	"fyne.io/fyne/v2"
@@ -143,7 +144,7 @@ func (a *App) createOrganizeTab() fyne.CanvasObject {
 		target := patternTargetEntry.Text
 
 		if match == "" || target == "" {
-			a.ShowError("Missing pattern info", fmt.Errorf("both pattern match and target must be specified"))
+			a.ShowError("Missing pattern info", errors.New("both pattern match and target must be specified"))
 			return
 		}
 
@@ -258,13 +259,13 @@ func (a *App) createOrganizeTab() fyne.CanvasObject {
 	// Main organize button
 	organizeButton := widget.NewButton("Organize Now", func() {
 		if a.cfg.Directories.Default == "" {
-			a.ShowError("No Directory Selected", fmt.Errorf("please select a directory to organize"))
+			a.ShowError("No Directory Selected", errors.New("please select a directory to organize"))
 			return
 		}
 
 		// Check if patterns exist
 		if len(a.cfg.Organize.Patterns) == 0 {
-			a.ShowError("No Patterns Defined", fmt.Errorf("please define at least one organization pattern"))
+			a.ShowError("No Patterns Defined", errors.New("please define at least one organization pattern"))
 			return
 		}
 
@@ -290,7 +291,8 @@ func (a *App) createOrganizeTab() fyne.CanvasObject {
 
 		// Show results
 		if errorCount > 0 {
-			a.ShowError("Organization Partially Completed", fmt.Errorf("moved %d files, encountered %d errors", movedCount, errorCount))
+			a.ShowError("Organization Partially Completed",
+				errors.Newf("moved %d files, encountered %d errors", movedCount, errorCount))
 		} else if a.cfg.Settings.DryRun {
 			a.ShowInfo(fmt.Sprintf("Dry run complete. Would organize %d files.", movedCount))
 		} else {
@@ -384,7 +386,7 @@ func (a *App) applyPresetRule(ruleType string) {
 		destDir = "Archives"
 		newPattern = types.Pattern{Match: "*.{zip,rar,tar,gz,7z}", Target: destDir}
 	default:
-		a.ShowError("Invalid Preset", fmt.Errorf("unknown preset rule type: %s", ruleType))
+		a.ShowError("Invalid Preset", errors.Newf("unknown preset rule type: %s", ruleType))
 		return
 	}
 
@@ -406,7 +408,8 @@ func (a *App) applyPresetRule(ruleType string) {
 	if a.cfg.Settings.CreateDirs {
 		fullDestPath := filepath.Join(a.cfg.Directories.Default, destDir)
 		if err := os.MkdirAll(fullDestPath, 0755); err != nil {
-			a.ShowError("Directory Creation Failed", fmt.Errorf("could not create target directory '%s': %w", fullDestPath, err))
+			a.ShowError("Directory Creation Failed",
+				errors.NewFileError("could not create target directory", fullDestPath, errors.FileCreateFailed, err))
 		}
 	}
 
@@ -426,20 +429,23 @@ func (a *App) handleNaturalLanguageCommand(command string) {
 			a.ShowError("Natural Language Organize Failed", err)
 		} else {
 			var movedCount, errorCount int
-			var errors []string
+			var errorMessages []string
 			for _, res := range results {
 				if res.Error != nil {
 					errorCount++
-					errors = append(errors, fmt.Sprintf("%s: %v", filepath.Base(res.SourcePath), res.Error))
+					errorMessages = append(errorMessages, fmt.Sprintf("%s: %v", filepath.Base(res.SourcePath), res.Error))
 				} else if res.Moved {
 					movedCount++
 				}
 			}
 			msg := fmt.Sprintf("Organization complete. %d files processed/moved.", movedCount)
 			if errorCount > 0 {
-				errorMsg := fmt.Sprintf("Encountered %d errors:\\n%s", errorCount, strings.Join(errors, "\\n"))
+				errorMsg := fmt.Sprintf("Encountered %d errors:\\n%s", errorCount, strings.Join(errorMessages, "\\n"))
 				msg += "\\n" + errorMsg
-				a.ShowError("Organization encountered errors", fmt.Errorf(strings.Join(errors, "\\n"))) // Show first error
+
+				// Create a composite error with all the error messages
+				combinedError := errors.New(strings.Join(errorMessages, "; "))
+				a.ShowError("Organization encountered errors", combinedError)
 			} else {
 				a.ShowInfo(msg)
 			}

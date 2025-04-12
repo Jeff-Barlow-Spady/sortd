@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -14,6 +15,8 @@ import (
 	"github.com/gobwas/glob"
 	"gopkg.in/yaml.v3"
 
+	sortdErrors "sortd/internal/errors"
+	"sortd/internal/log"
 	"sortd/pkg/types"
 )
 
@@ -112,7 +115,8 @@ func (m *Manager) ProcessEvent(event fsnotify.Event) (processed bool, err error)
 	// Basic check: ensure file exists before proceeding (might have been deleted quickly)
 	fileInfo, statErr := os.Stat(event.Name)
 	if statErr != nil {
-		// Log? For now, just treat as not processed
+		// Log the stat error
+		log.LogWithFields(log.F("file", event.Name), log.F("error", statErr)).Debug("File no longer exists, skipping workflow processing")
 		return false, nil
 	}
 
@@ -149,7 +153,11 @@ func (m *Manager) ProcessEvent(event fsnotify.Event) (processed bool, err error)
 		if workflow.Trigger.Pattern != "" {
 			patternMatcher, compileErr := glob.Compile(workflow.Trigger.Pattern)
 			if compileErr != nil {
-				fmt.Fprintf(os.Stderr, "Error compiling workflow pattern '%s' for %s: %v\n", workflow.Trigger.Pattern, workflow.ID, compileErr)
+				log.LogWithFields(
+					log.F("pattern", workflow.Trigger.Pattern),
+					log.F("workflow_id", workflow.ID),
+					log.F("error", compileErr),
+				).Error("Error compiling workflow pattern")
 				continue // Skip workflow with invalid pattern
 			}
 			// Match against the full path of the event
@@ -170,9 +178,20 @@ func (m *Manager) ProcessEvent(event fsnotify.Event) (processed bool, err error)
 		workflowProcessed = true // Mark that at least one workflow was triggered
 
 		// Log the result
-		fmt.Printf("Workflow %s (%s) execution: %v\n", workflow.Name, workflow.ID, result.Success)
-		if !result.Success && result.Error != nil {
-			fmt.Printf("  Error: %v\n", result.Error)
+		if result.Success {
+			log.LogWithFields(
+				log.F("workflow_name", workflow.Name),
+				log.F("workflow_id", workflow.ID),
+				log.F("file", event.Name),
+			).Info("Workflow executed successfully")
+		} else {
+			log.LogWithFields(
+				log.F("workflow_name", workflow.Name),
+				log.F("workflow_id", workflow.ID),
+				log.F("file", event.Name),
+				log.F("error", result.Error),
+			).Error("Workflow execution failed")
+
 			// If a workflow fails, return processed=true (it was attempted) but also return the error
 			return true, result.Error
 		}
@@ -403,9 +422,14 @@ func (m *Manager) executeMoveAction(action types.Action, filePath string) error 
 	// In dry run mode, just log what would happen
 	if m.dryRun {
 		if targetExists && action.Options["overwrite"] == "true" {
-			fmt.Printf("[DRY RUN] Would overwrite existing file: %s\n", targetPath)
+			log.LogWithFields(
+				log.F("file", targetPath),
+			).Info("[DRY RUN] Would overwrite existing file")
 		}
-		fmt.Printf("[DRY RUN] Would move file from %s to %s\n", filePath, targetPath)
+		log.LogWithFields(
+			log.F("source", filePath),
+			log.F("destination", targetPath),
+		).Info("[DRY RUN] Would move file")
 		return nil
 	}
 
@@ -414,6 +438,10 @@ func (m *Manager) executeMoveAction(action types.Action, filePath string) error 
 		return fmt.Errorf("failed to move file: %w", err)
 	}
 
+	log.LogWithFields(
+		log.F("source", filePath),
+		log.F("destination", targetPath),
+	).Info("Moved file successfully")
 	return nil
 }
 
@@ -545,12 +573,62 @@ func (m *Manager) executeDeleteAction(action types.Action, filePath string) erro
 func (m *Manager) executeCommandAction(action types.Action, filePath string) error {
 	// In dry run mode, just log what would happen
 	if m.dryRun {
-		fmt.Printf("[DRY RUN] Would execute command: %s (with file: %s)\n", action.Target, filePath)
+		log.LogWithFields(
+			log.F("command", action.Target),
+			log.F("file", filePath),
+		).Info("[DRY RUN] Would execute command")
 		return nil
 	}
 
-	// This is a placeholder - a real implementation would need to safely execute commands
-	fmt.Printf("Would execute command: %s (with file: %s)\n", action.Target, filePath)
+	// Parse the command and replace variables
+	command := action.Target
+	command = strings.ReplaceAll(command, "{{ .FilePath }}", filePath)
+	command = strings.ReplaceAll(command, "{{.FilePath}}", filePath)
+
+	// Get options
+	runAsyncStr, hasAsync := action.Options["runAsynchronously"]
+	runAsync := hasAsync && (runAsyncStr == "true" || runAsyncStr == "yes" || runAsyncStr == "1")
+
+	shell, hasShell := action.Options["shell"]
+	if !hasShell {
+		shell = "/bin/sh" // Default to sh
+	}
+
+	// Prepare command - we'll use the shell to parse the command properly
+	cmd := exec.Command(shell, "-c", command)
+
+	// Set environment variables
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("SORTD_FILE=%s", filePath))
+
+	// If running asynchronously, just start it and return
+	if runAsync {
+		if err := cmd.Start(); err != nil {
+			return sortdErrors.Wrap(err, "failed to start command asynchronously")
+		}
+
+		// Don't wait for completion
+		log.LogWithFields(
+			log.F("command", command),
+		).Info("Started async command")
+		return nil
+	}
+
+	// For synchronous execution, capture output
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.LogWithFields(
+			log.F("command", command),
+			log.F("output", string(output)),
+			log.F("error", err),
+		).Error("Command execution failed")
+		return sortdErrors.Wrapf(err, "command execution failed: %s", string(output))
+	}
+
+	log.LogWithFields(
+		log.F("command", command),
+		log.F("output", string(output)),
+	).Info("Command executed successfully")
 	return nil
 }
 
@@ -571,13 +649,13 @@ func (m *Manager) GetWorkflows() []types.Workflow {
 func (m *Manager) AddWorkflow(workflow types.Workflow) error {
 	// Validate the workflow
 	if err := validateWorkflow(&workflow); err != nil {
-		return err
+		return sortdErrors.Wrap(err, "workflow validation failed")
 	}
 
 	// Check for ID collision
 	for _, existing := range m.workflows {
 		if existing.ID == workflow.ID {
-			return fmt.Errorf("workflow with ID %s already exists", workflow.ID)
+			return sortdErrors.NewRuleError("workflow with ID already exists", workflow.ID, sortdErrors.InvalidRule, nil)
 		}
 	}
 
@@ -592,7 +670,7 @@ func (m *Manager) AddWorkflow(workflow types.Workflow) error {
 func (m *Manager) UpdateWorkflow(workflow types.Workflow) error {
 	// Validate the workflow
 	if err := validateWorkflow(&workflow); err != nil {
-		return err
+		return sortdErrors.Wrap(err, "workflow validation failed")
 	}
 
 	// Find and update the workflow
@@ -606,7 +684,7 @@ func (m *Manager) UpdateWorkflow(workflow types.Workflow) error {
 	}
 
 	if !found {
-		return fmt.Errorf("workflow with ID %s not found", workflow.ID)
+		return sortdErrors.NewRuleError("workflow not found", workflow.ID, sortdErrors.RuleNotFound, nil)
 	}
 
 	// Save to file
@@ -624,14 +702,14 @@ func (m *Manager) DeleteWorkflow(id string) error {
 			// Delete the file
 			filePath := filepath.Join(m.configPath, id+".yaml")
 			if err := os.Remove(filePath); err != nil {
-				return fmt.Errorf("failed to delete workflow file: %w", err)
+				return sortdErrors.NewFileError("failed to delete workflow file", filePath, sortdErrors.FileOperationFailed, err)
 			}
 
 			return nil
 		}
 	}
 
-	return fmt.Errorf("workflow with ID %s not found", id)
+	return sortdErrors.NewRuleError("workflow not found", id, sortdErrors.RuleNotFound, nil)
 }
 
 // saveWorkflow saves a workflow to its configuration file
@@ -639,13 +717,13 @@ func (m *Manager) saveWorkflow(workflow types.Workflow) error {
 	// Marshal to YAML
 	data, err := yaml.Marshal(workflow)
 	if err != nil {
-		return fmt.Errorf("failed to marshal workflow: %w", err)
+		return sortdErrors.Wrap(err, "failed to marshal workflow")
 	}
 
 	// Save to file
 	filePath := filepath.Join(m.configPath, workflow.ID+".yaml")
 	if err := os.WriteFile(filePath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write workflow file: %w", err)
+		return sortdErrors.NewFileError("failed to write workflow file", filePath, sortdErrors.FileCreateFailed, err)
 	}
 
 	return nil
@@ -663,18 +741,21 @@ func (m *Manager) ExecuteWorkflow(workflowID, filePath string) (*types.WorkflowR
 	}
 
 	if targetWorkflow == nil {
-		return nil, fmt.Errorf("workflow with ID %s not found", workflowID)
+		return nil, sortdErrors.NewRuleError("workflow not found", workflowID, sortdErrors.RuleNotFound, nil)
 	}
 
 	// Check if file exists
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("file not found: %w", err)
+		if os.IsNotExist(err) {
+			return nil, sortdErrors.NewFileError("file not found", filePath, sortdErrors.FileNotFound, err)
+		}
+		return nil, sortdErrors.NewFileError("error accessing file", filePath, sortdErrors.FileAccessDenied, err)
 	}
 
 	// For manual execution, we skip the trigger check but still evaluate conditions
 	if !m.evaluateConditions(targetWorkflow.Conditions, filePath, fileInfo) {
-		return nil, fmt.Errorf("file does not meet workflow conditions")
+		return nil, sortdErrors.NewRuleError("file does not meet workflow conditions", workflowID, sortdErrors.InvalidOperation, nil)
 	}
 
 	// Execute the workflow

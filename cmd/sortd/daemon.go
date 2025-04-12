@@ -35,8 +35,9 @@ func NewDaemonCmd() *cobra.Command {
 // newDaemonStartCmd creates the 'daemon start' command
 func newDaemonStartCmd() *cobra.Command {
 	var (
-		directories []string
-		interval    int
+		directories    []string
+		interval       int
+		nonInteractive bool
 	)
 
 	startCmd := &cobra.Command{
@@ -62,6 +63,13 @@ func newDaemonStartCmd() *cobra.Command {
 			// Add interval if specified
 			if interval > 0 {
 				watchArgs = append(watchArgs, fmt.Sprintf("--interval=%d", interval))
+			}
+
+			// Add non-interactive flag if specified
+			if nonInteractive {
+				watchArgs = append(watchArgs, "--non-interactive")
+				// Also set in environment for the current process
+				os.Setenv("SORTD_NON_INTERACTIVE", "true")
 			}
 
 			// Build the full command
@@ -92,6 +100,7 @@ func newDaemonStartCmd() *cobra.Command {
 	// Add flags
 	startCmd.Flags().StringSliceVarP(&directories, "dir", "d", []string{}, "Directories to watch (can specify multiple times)")
 	startCmd.Flags().IntVarP(&interval, "interval", "i", 300, "Check interval in seconds")
+	startCmd.Flags().BoolVarP(&nonInteractive, "non-interactive", "N", false, "Run in non-interactive mode (no user prompts)")
 
 	return startCmd
 }

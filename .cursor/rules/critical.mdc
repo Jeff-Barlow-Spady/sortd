@@ -18,7 +18,7 @@ globs: *.go, *.sh
 - NO NEW CLASSES OR FUNCTIONS unless explicitly requested
 - NO REFACTORING unless explicitly requested
 - NO "IMPROVEMENTS" unless explicitly requested
-- MAINTAIN EXISTING PATTERNS even if you think they're suboptimal
+- MAINTAIN EXISTING PATTERNS - unless the existing pattern is incorrect - this was written largely by llms so we need to ensure as consistent an api surface as possible while minimizing tech dept
 
 ## When Analyzing Issues
 - Focus only on the specific issue mentioned

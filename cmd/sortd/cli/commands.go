@@ -583,6 +583,127 @@ var GUICmd = &cobra.Command{
 	},
 }
 
+// ThemeCmd represents the theme command
+var ThemeCmd = &cobra.Command{
+	Use:   "theme",
+	Short: "Change or view the CLI theme",
+	Long:  `Change or view the color theme for the CLI interface.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		list, _ := cmd.Flags().GetBool("list")
+		interactive, _ := cmd.Flags().GetBool("interactive")
+		themeName, _ := cmd.Flags().GetString("name")
+
+		if list {
+			// List all available themes
+			PrintHeader("Available Themes")
+			for _, theme := range AvailableThemes {
+				fmt.Printf("%s%s%s - %s\n",
+					theme.Highlight,
+					theme.Name,
+					colorReset,
+					theme.Description)
+			}
+			return
+		}
+
+		if interactive && HasGum() {
+			// Use Gum to interactively select a theme
+			PrintHeader("Theme Selection")
+
+			var options []string
+			for _, theme := range AvailableThemes {
+				options = append(options, theme.Name)
+			}
+
+			selected := RunGumChoose(options...)
+			if selected != "" {
+				if SetTheme(selected) {
+					PrintSuccess(fmt.Sprintf("Theme changed to '%s'", selected))
+
+					// Save the theme preference
+					if err := SaveThemePreference(); err != nil {
+						PrintWarning(fmt.Sprintf("Failed to save theme preference: %v", err))
+					}
+
+					// Display theme demo
+					showThemeDemo()
+				} else {
+					PrintError(fmt.Sprintf("Failed to set theme '%s'", selected))
+				}
+			} else {
+				PrintWarning("Theme selection cancelled")
+			}
+			return
+		}
+
+		if themeName != "" {
+			// Set theme by name
+			if SetTheme(themeName) {
+				PrintSuccess(fmt.Sprintf("Theme changed to '%s'", themeName))
+
+				// Save the theme preference
+				if err := SaveThemePreference(); err != nil {
+					PrintWarning(fmt.Sprintf("Failed to save theme preference: %v", err))
+				}
+
+				// Display theme demo if not in non-interactive mode
+				if interactive {
+					showThemeDemo()
+				}
+			} else {
+				PrintError(fmt.Sprintf("Unknown theme: '%s'", themeName))
+				PrintInfo("Use 'sortd theme --list' to see available themes")
+			}
+			return
+		}
+
+		// No options provided, show current theme and help
+		PrintHeader("Current Theme")
+		fmt.Printf("Current theme: %s%s%s\n",
+			CurrentTheme.Highlight,
+			CurrentTheme.Name,
+			colorReset)
+
+		PrintInfo("Use 'sortd theme --list' to see available themes")
+		PrintInfo("Use 'sortd theme --name=THEME' to change the theme")
+		PrintInfo("Use 'sortd theme --interactive' to select a theme interactively")
+
+		// Display theme demo
+		showThemeDemo()
+	},
+}
+
+// showThemeDemo displays a demo of all the theme colors
+func showThemeDemo() {
+	PrintHeader("Theme Demo")
+
+	// Display all the styled text
+	fmt.Println(CurrentTheme.Success + "This is Success text" + colorReset)
+	fmt.Println(CurrentTheme.Error + "This is Error text" + colorReset)
+	fmt.Println(CurrentTheme.Warning + "This is Warning text" + colorReset)
+	fmt.Println(CurrentTheme.Info + "This is Info text" + colorReset)
+	fmt.Println(CurrentTheme.Header + "This is Header text" + colorReset)
+	fmt.Println(CurrentTheme.Highlight + "This is Highlight text" + colorReset)
+	fmt.Println(CurrentTheme.Normal + "This is Normal text" + colorReset)
+
+	// Display a box
+	box := "This is a themed box\nIt uses the theme's box outline color"
+	fmt.Println(DrawBoxWithTheme(box))
+
+	// Display logo in theme color
+	fmt.Println(DrawSortdLogo())
+}
+
+// Ensure ThemeCmd is initialized
+func init() {
+	ThemeCmd.Flags().BoolP("list", "l", false, "List all available themes")
+	ThemeCmd.Flags().StringP("name", "n", "", "Set theme by name")
+	ThemeCmd.Flags().BoolP("interactive", "i", false, "Select theme interactively")
+
+	// Load saved theme preference
+	LoadThemePreference()
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately
 func Execute() error {
 	// Add subcommands
@@ -590,9 +711,10 @@ func Execute() error {
 	RootCmd.AddCommand(WatchCmd)
 	RootCmd.AddCommand(SetupCmd)
 	RootCmd.AddCommand(GUICmd)
+	RootCmd.AddCommand(ThemeCmd)
 
 	// Add global flags
-	RootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.config/sortd/config.yaml)")
+	RootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is $HOME/.config/sortd/config.yaml)")
 
 	// Add organize command flags
 	OrganizeCmd.Flags().BoolP("dry-run", "d", false, "Simulate operations without making changes")

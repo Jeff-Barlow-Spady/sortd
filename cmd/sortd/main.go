@@ -30,6 +30,9 @@ func main() {
 	// Set the version from this file
 	rootCmd.Version = version
 
+	// Load theme preferences
+	cli.LoadThemePreference()
+
 	// Prepend logo to help message
 	helpTemplate := cli.DrawSortdLogo() + "\n\n" + rootCmd.UsageTemplate()
 	rootCmd.SetUsageTemplate(helpTemplate)
@@ -42,6 +45,7 @@ func main() {
 	rootCmd.AddCommand(guiCmd())
 	rootCmd.AddCommand(watchCmd())
 	rootCmd.AddCommand(daemonCmd)
+	rootCmd.AddCommand(cli.ThemeCmd)
 
 	// Initialize workflow commands
 	initWorkflowCommands(rootCmd)
@@ -60,6 +64,7 @@ func main() {
 func organizeCmd() *cobra.Command {
 	var dir string
 	var dryRun bool
+	var nonInteractive bool
 
 	cmd := &cobra.Command{
 		Use:   "organize [directory]",
@@ -88,6 +93,9 @@ func organizeCmd() *cobra.Command {
 			}
 			if cmd.Flags().Changed("dry-run") {
 				cfg.Settings.DryRun = dryRun
+			}
+			if cmd.Flags().Changed("non-interactive") {
+				cfg.Settings.NonInteractive = nonInteractive
 			}
 
 			// Create the organize engine
@@ -133,6 +141,7 @@ func organizeCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&dir, "directory", "d", "", "Directory to organize (overrides argument, defaults to current directory)")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "Show what would be done without actually moving files")
+	cmd.Flags().BoolVarP(&nonInteractive, "non-interactive", "N", false, "Run in non-interactive mode (no prompts)")
 
 	return cmd
 }
@@ -285,6 +294,7 @@ func analyzeCmd() *cobra.Command {
 // watchCmd creates a command for watch mode
 func watchCmd() *cobra.Command {
 	var background bool // Keep background flag for now
+	var nonInteractive bool
 
 	cmd := &cobra.Command{
 		Use:   "watch",
@@ -307,6 +317,11 @@ and organize them automatically based on defined rules and patterns.`,
 				fmt.Println("No watch directories specified in the configuration. Nothing to watch.")
 				fmt.Println("Please add directories to the 'watch_directories' section of your config file.")
 				os.Exit(0)
+			}
+
+			// Handle non-interactive flag
+			if cmd.Flags().Changed("non-interactive") {
+				cfg.Settings.NonInteractive = nonInteractive
 			}
 
 			// Create the watch daemon - Pass only config, returns (*Daemon, error)
@@ -346,6 +361,7 @@ and organize them automatically based on defined rules and patterns.`,
 
 	// Keep background flag for now, although true daemonization is needed later
 	cmd.Flags().BoolVarP(&background, "background", "b", false, "Run in background mode (basic implementation)")
+	cmd.Flags().BoolVarP(&nonInteractive, "non-interactive", "N", false, "Run in non-interactive mode (no prompts)")
 
 	return cmd
 }
@@ -397,7 +413,47 @@ var daemonStopCmd = &cobra.Command{
 	},
 }
 
+// Create a start command for daemon to replace using "watch -b"
+var daemonStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the daemon in background mode",
+	Run: func(cmd *cobra.Command, args []string) {
+		// Get non-interactive flag value
+		nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
+
+		// Load configuration
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			log.Errorf("Failed to load config: %v", err)
+			return
+		}
+
+		// Set non-interactive mode if flag is provided
+		if cmd.Flags().Changed("non-interactive") {
+			cfg.Settings.NonInteractive = nonInteractive
+		}
+
+		// Check if watch directories are configured
+		if len(cfg.WatchDirectories) == 0 {
+			log.Error("No watch directories configured. Please update your config.")
+			return
+		}
+
+		// Start the daemon
+		fmt.Println("Starting watch daemon in background...")
+		if err := watch.DaemonControl(cfg, false); err != nil {
+			log.Errorf("Failed to start daemon: %v", err)
+			return
+		}
+		fmt.Println("Daemon started successfully. Logs will be written to sortd.log")
+	},
+}
+
 func init() {
 	daemonCmd.AddCommand(daemonStatusCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
+	daemonCmd.AddCommand(daemonStartCmd)
+
+	// Add non-interactive flag to daemon start command
+	daemonStartCmd.Flags().BoolP("non-interactive", "N", false, "Run in non-interactive mode (no prompts)")
 }

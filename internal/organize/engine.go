@@ -286,7 +286,7 @@ func (e *Engine) findUniqueDestName(originalPath string) (string, error) {
 	return "", errors.New("couldn't find a unique name after 1000 attempts")
 }
 
-// createBackup creates a backup of the destination file if it exists
+// createBackup creates a backup of a file before moving/overwriting it
 func (e *Engine) createBackup(dest string) error {
 	// Check if file exists first
 	_, err := os.Stat(dest)
@@ -295,7 +295,7 @@ func (e *Engine) createBackup(dest string) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		return errors.NewFileError("failed to check file for backup", dest, errors.FileAccessDenied, err)
 	}
 
 	// Create backup directory if it doesn't exist
@@ -329,19 +329,19 @@ func (e *Engine) createBackup(dest string) error {
 
 	srcFile, err := os.Open(dest)
 	if err != nil {
-		return err
+		return errors.NewFileError("failed to open source file for backup", dest, errors.FileAccessDenied, err)
 	}
 	defer srcFile.Close()
 
 	destFile, err := os.Create(backupPath)
 	if err != nil {
-		return err
+		return errors.NewFileError("failed to create backup file", backupPath, errors.FileCreateFailed, err)
 	}
 	defer destFile.Close()
 
 	_, err = io.Copy(destFile, srcFile)
 	if err != nil {
-		return err
+		return errors.NewFileError("failed to copy file content to backup", dest, errors.FileOperationFailed, err)
 	}
 
 	log.Info("Created backup: %s", backupPath)
@@ -383,7 +383,7 @@ func (e *Engine) OrganizeByPatterns(files []string) error {
 			}
 
 			if err := e.MoveFile(file, dest); err != nil {
-				wrappedErr := errors.Wrapf(err, "failed to move %s", file)
+				wrappedErr := errors.Wrapf(err, "failed to move %s to %s", file, dest)
 				log.LogError(wrappedErr, "Error during pattern organization") // Log the specific error
 				if firstError == nil {
 					firstError = wrappedErr // Store the first error
@@ -395,15 +395,32 @@ func (e *Engine) OrganizeByPatterns(files []string) error {
 			log.LogWithFields(log.F("file", file)).Debug("No pattern match for file")
 		}
 	}
+
 	// Return the first error encountered, if any
-	return firstError
+	if firstError != nil {
+		// Add additional context about the overall operation
+		return errors.Wrap(firstError, "pattern-based organization had errors")
+	}
+	return nil
 }
 
-// Add directory organization method
+// OrganizeDir organizes all files in a directory according to patterns
+// and returns a list of successfully organized files
 func (e *Engine) OrganizeDir(dir string) ([]string, error) {
+	logger := log.LogWithFields(log.F("directory", dir))
+	logger.Info("Organizing directory using patterns")
+
+	// Check if directory exists first
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, errors.NewFileError("directory not found", dir, errors.FileNotFound, err)
+		}
+		return nil, errors.NewFileError("failed to access directory", dir, errors.FileAccessDenied, err)
+	}
+
 	results, err := e.OrganizeDirectory(dir)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "failed to organize directory '%s'", dir)
 	}
 
 	// Convert the results to a simple list of organized files
@@ -414,6 +431,7 @@ func (e *Engine) OrganizeDir(dir string) ([]string, error) {
 		}
 	}
 
+	logger.With(log.F("organized_count", len(organized))).Info("Directory organization complete")
 	return organized, nil
 }
 

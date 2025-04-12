@@ -19,6 +19,7 @@ func NewWatchCmd() *cobra.Command {
 		confirmInterval int
 		foreground      bool
 		background      bool
+		nonInteractive  bool
 	)
 
 	cmd := &cobra.Command{
@@ -26,6 +27,11 @@ func NewWatchCmd() *cobra.Command {
 		Short: "Watch directories for file changes",
 		Long:  `Watch specified directories for changes and organize files automatically based on configuration.`,
 		Run: func(cmd *cobra.Command, args []string) {
+			// Set non-interactive mode in environment for consistent access across functions
+			if nonInteractive {
+				os.Setenv("SORTD_NON_INTERACTIVE", "true")
+			}
+
 			// 1. Ensure configuration is loaded (should be done by root PersistentPreRun)
 			if cfg == nil {
 				fmt.Println(errorText("Configuration not loaded. Cannot start watch command."))
@@ -58,6 +64,16 @@ func NewWatchCmd() *cobra.Command {
 			if cfg.Settings.DryRun {
 				daemon.SetDryRun(true)
 				fmt.Println(infoText("Running in dry-run mode"))
+			}
+
+			// Set non-interactive mode if specified
+			if nonInteractive {
+				cfg.Settings.NonInteractive = true
+				if requireConfirm {
+					fmt.Println(warningText("Warning: non-interactive mode will override confirmation requirements"))
+					requireConfirm = false
+					daemon.SetRequireConfirmation(false)
+				}
 			}
 
 			// Set callback for confirmations if required
@@ -138,6 +154,7 @@ func NewWatchCmd() *cobra.Command {
 	cmd.Flags().IntVar(&confirmInterval, "confirmation-period", 60, "Period in seconds for batch confirmations")
 	cmd.Flags().BoolVarP(&foreground, "foreground", "f", false, "Run in foreground (don't daemonize)")
 	cmd.Flags().BoolVarP(&background, "background", "b", false, "Run in background (daemonize)")
+	cmd.Flags().BoolVarP(&nonInteractive, "non-interactive", "N", false, "Run in non-interactive mode (no user prompts)")
 
 	return cmd
 }

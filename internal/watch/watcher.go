@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"sortd/internal/log"
+
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -86,7 +88,7 @@ func (w *Watcher) AddDirectory(dir string) error {
 		w.directories = append(w.directories, dir)
 	}
 	w.mutex.Unlock()
-	fmt.Fprintf(os.Stdout, "Watching directory: %s\n", dir)
+	log.LogWithFields(log.F("directory", dir)).Info("Watching directory")
 	return nil
 }
 
@@ -110,18 +112,15 @@ func (w *Watcher) Start() error {
 
 	// Start the event processing loop in a separate goroutine
 	go func() {
-		fmt.Fprintln(os.Stdout, "Watcher event loop started.") // Debug print
+		log.Info("Watcher event loop started.")
 
 		for {
 			select {
 			case event, ok := <-w.fsWatcher.Events:
 				if !ok {
-					fmt.Fprintln(os.Stdout, "fsWatcher.Events channel closed") // Debug print
-					return                                                     // Channel closed
+					log.Info("fsWatcher.Events channel closed")
+					return // Channel closed
 				}
-
-				// Debug: Print raw event
-				// fmt.Fprintf(os.Stdout, "Raw fsnotify event: %+v\n", event)
 
 				// Ignore directory events for now, handle file creation/write
 				// Checking existence is crucial, event might be for a deleted file
@@ -130,7 +129,7 @@ func (w *Watcher) Start() error {
 					if err != nil {
 						// File might have been quickly deleted after event, or it's a dir event we can ignore
 						if !os.IsNotExist(err) {
-							fmt.Fprintf(os.Stderr, "Error stating file %s: %v\n", event.Name, err)
+							log.LogWithFields(log.F("file", event.Name), log.F("error", err)).Error("Error stating file")
 						}
 						continue // Skip this event
 					}
@@ -150,29 +149,27 @@ func (w *Watcher) Start() error {
 					// Send event non-blockingly to avoid goroutine getting stuck if channel full
 					select {
 					case w.fileModChan <- mod:
-						// fmt.Fprintf(os.Stdout, "Sent modification to channel: %+v\n", mod) // Debug print
+						// Successfully sent modification to channel
 					default:
-						// Use proper logging
-						fmt.Fprintf(os.Stderr, "Warning: event channel is full, dropped event for %s\n", event.Name)
+						log.LogWithFields(log.F("file", event.Name)).Warn("Event channel is full, dropped event")
 					}
 				}
 
 			case err, ok := <-w.fsWatcher.Errors:
 				if !ok {
-					fmt.Fprintln(os.Stdout, "fsWatcher.Errors channel closed") // Debug print
-					return                                                     // Channel closed
+					log.Info("fsWatcher.Errors channel closed")
+					return // Channel closed
 				}
-				// Use proper logging
-				fmt.Fprintf(os.Stderr, "fsnotify watcher error: %v\n", err)
+				log.LogWithFields(log.F("error", err)).Error("fsnotify watcher error")
 
 			case <-w.stopChan:
-				fmt.Fprintln(os.Stdout, "Watcher event loop received stop signal.") // Debug print
-				return                                                              // Exit goroutine
+				log.Info("Watcher event loop received stop signal.")
+				return // Exit goroutine
 			}
 		}
 	}()
 
-	fmt.Fprintln(os.Stdout, "Watcher started.")
+	log.Info("Watcher started.")
 	return nil
 }
 
@@ -190,8 +187,7 @@ func (w *Watcher) Stop() {
 
 	// Close the underlying fsnotify watcher
 	if err := w.fsWatcher.Close(); err != nil {
-		// Use proper logging
-		fmt.Fprintf(os.Stderr, "Error closing fsnotify watcher: %v\n", err)
+		log.LogWithFields(log.F("error", err)).Error("Error closing fsnotify watcher")
 	}
 
 	w.running = false
@@ -200,7 +196,7 @@ func (w *Watcher) Stop() {
 	// Do this under the lock to prevent races with FileChannel()
 	close(w.fileModChan)
 
-	fmt.Fprintln(os.Stdout, "Watcher stopped.") // Debug print
+	log.Info("Watcher stopped.")
 }
 
 // IsRunning returns whether the watcher is currently active

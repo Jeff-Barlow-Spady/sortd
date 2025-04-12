@@ -67,7 +67,7 @@ func DaemonControl(cfg *config.Config, foreground bool) error {
 
 	// Start the daemon
 	if err := startDaemon(); err != nil {
-		log.Error("Failed to start daemon: %v", err)
+		log.LogWithFields(log.F("error", err)).Error("Failed to start daemon")
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
@@ -81,12 +81,6 @@ func DaemonControl(cfg *config.Config, foreground bool) error {
 	}
 
 	// Background mode - write PID file and exit parent
-	if err := context.WritePid(); err != nil {
-		log.Error("Failed to write PID file: %v", err)
-		return fmt.Errorf("failed to write PID file: %w", err)
-	}
-
-	// In background mode, the parent process exits
 	return nil
 }
 
@@ -201,7 +195,7 @@ func parsePid(pidStr string) (int, error) {
 	return pid, nil
 }
 
-// Status returns the status of the daemon
+// Status returns the current status of the daemon
 func Status(cfg *config.Config) (config.DaemonStatus, error) {
 	pidPath := filepath.Join(cfg.Directories.Default, pidFile)
 	if !IsDaemonRunning(cfg) {
@@ -211,13 +205,13 @@ func Status(cfg *config.Config) (config.DaemonStatus, error) {
 	// Read PID from file
 	data, err := os.ReadFile(pidPath)
 	if err != nil {
-		log.Error("Failed to read PID file: %v", err)
+		log.LogWithFields(log.F("error", err)).Error("Failed to read PID file")
 		return config.DaemonStatus{}, fmt.Errorf("failed to read PID file: %w", err)
 	}
 
 	_, err = parsePid(string(data))
 	if err != nil {
-		log.Error("Failed to parse PID: %v", err)
+		log.LogWithFields(log.F("error", err)).Error("Failed to parse PID")
 		return config.DaemonStatus{}, fmt.Errorf("failed to parse PID: %w", err)
 	}
 

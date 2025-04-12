@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"sortd/internal/errors"
 	"sortd/pkg/types"
 	"sortd/pkg/workflow"
 
@@ -134,7 +135,7 @@ func NewWorkflowWizard(app *App) *WorkflowWizard {
 			onNext: func() bool {
 				// Validate name not empty
 				if strings.TrimSpace(w.workflowData.Name) == "" {
-					dialog.ShowError(fmt.Errorf("workflow name cannot be empty"), w.window)
+					dialog.ShowError(errors.New("workflow name cannot be empty"), w.window)
 					return false
 				}
 				return true
@@ -156,7 +157,7 @@ func NewWorkflowWizard(app *App) *WorkflowWizard {
 			onNext: func() bool {
 				// Must have at least one action
 				if len(w.workflowData.Actions) == 0 {
-					dialog.ShowError(fmt.Errorf("workflow must have at least one action"), w.window)
+					dialog.ShowError(errors.New("workflow must have at least one action"), w.window)
 					return false
 				}
 				return true
@@ -598,7 +599,7 @@ func (w *WorkflowWizard) createConditionsStep() fyne.CanvasObject {
 	// Add button
 	addButton := widget.NewButton("Add Condition", func() {
 		if conditionTypeSelect.Selected == "" || operatorSelect.Selected == "" || valueEntry.Text == "" {
-			w.app.ShowError("Missing Fields", fmt.Errorf("please fill in all required fields"))
+			w.app.ShowError("Missing Fields", errors.New("please fill in all required fields"))
 			return
 		}
 
@@ -789,7 +790,7 @@ func (w *WorkflowWizard) createActionsStep() fyne.CanvasObject {
 	// Add button
 	addButton := widget.NewButton("Add Action", func() {
 		if actionTypeSelect.Selected == "" || targetEntry.Text == "" {
-			w.app.ShowError("Missing Fields", fmt.Errorf("please fill in all required fields"))
+			w.app.ShowError("Missing Fields", errors.New("please fill in all required fields"))
 			return
 		}
 
@@ -929,19 +930,19 @@ func (w *WorkflowWizard) createReviewStep() fyne.CanvasObject {
 func (w *WorkflowWizard) saveWorkflow() {
 	// Check if the workflow is valid
 	if w.workflowData.ID == "" || w.workflowData.Name == "" {
-		w.app.ShowError("Invalid Workflow", fmt.Errorf("workflow must have an ID and name"))
+		w.app.ShowError("Invalid Workflow", errors.New("workflow must have an ID and name"))
 		return
 	}
 
 	if len(w.workflowData.Actions) == 0 {
-		w.app.ShowError("Invalid Workflow", fmt.Errorf("workflow must have at least one action"))
+		w.app.ShowError("Invalid Workflow", errors.New("workflow must have at least one action"))
 		return
 	}
 
 	// Get workflow directory from app config
 	home, err := os.UserHomeDir()
 	if err != nil {
-		w.app.ShowError("Error Saving Workflow", fmt.Errorf("failed to get home directory: %w", err))
+		w.app.ShowError("Error Saving Workflow", errors.Wrap(err, "failed to get home directory"))
 		return
 	}
 
@@ -949,20 +950,20 @@ func (w *WorkflowWizard) saveWorkflow() {
 
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(configDir, 0755); err != nil {
-		w.app.ShowError("Error Saving Workflow", fmt.Errorf("failed to create workflows directory: %w", err))
+		w.app.ShowError("Error Saving Workflow", errors.NewFileError("failed to create workflows directory", configDir, errors.FileCreateFailed, err))
 		return
 	}
 
 	// Create workflow manager
 	manager, err := workflow.NewManager(configDir)
 	if err != nil {
-		w.app.ShowError("Error Saving Workflow", fmt.Errorf("failed to initialize workflow manager: %w", err))
+		w.app.ShowError("Error Saving Workflow", errors.Wrap(err, "failed to initialize workflow manager"))
 		return
 	}
 
 	// Add workflow
 	if err := manager.AddWorkflow(w.workflowData); err != nil {
-		w.app.ShowError("Error Saving Workflow", fmt.Errorf("failed to save workflow: %w", err))
+		w.app.ShowError("Error Saving Workflow", errors.Wrap(err, "failed to save workflow"))
 		return
 	}
 
@@ -984,7 +985,7 @@ func (w *WorkflowWizard) saveWorkflow() {
 func (w *WorkflowWizard) testWorkflow() {
 	// Validate workflow first
 	if w.workflowData.ID == "" || w.workflowData.Name == "" || len(w.workflowData.Actions) == 0 {
-		w.app.ShowError("Invalid Workflow", fmt.Errorf("workflow must have an ID, name, and at least one action"))
+		w.app.ShowError("Invalid Workflow", errors.New("workflow must have an ID, name, and at least one action"))
 		return
 	}
 
@@ -1000,14 +1001,14 @@ func (w *WorkflowWizard) testWorkflow() {
 		// Create temporary workflow manager with dry run mode
 		home, err := os.UserHomeDir()
 		if err != nil {
-			w.app.ShowError("Test Error", fmt.Errorf("failed to get home directory: %w", err))
+			w.app.ShowError("Test Error", errors.Wrap(err, "failed to get home directory"))
 			return
 		}
 
 		configDir := filepath.Join(home, ".config", "sortd", "workflows")
 		manager, err := workflow.NewManager(configDir)
 		if err != nil {
-			w.app.ShowError("Test Error", fmt.Errorf("failed to initialize workflow manager: %w", err))
+			w.app.ShowError("Test Error", errors.Wrap(err, "failed to initialize workflow manager"))
 			return
 		}
 
@@ -1022,7 +1023,7 @@ func (w *WorkflowWizard) testWorkflow() {
 		// Add workflow temporarily
 		if err := manager.AddWorkflow(w.workflowData); err != nil {
 			w.workflowData.ID = origID // Restore original ID
-			w.app.ShowError("Test Error", fmt.Errorf("failed to setup workflow for testing: %w", err))
+			w.app.ShowError("Test Error", errors.Wrap(err, "failed to setup workflow for testing"))
 			return
 		}
 
@@ -1037,7 +1038,7 @@ func (w *WorkflowWizard) testWorkflow() {
 
 		// Handle result
 		if err != nil {
-			w.app.ShowError("Test Error", fmt.Errorf("failed to execute workflow: %w", err))
+			w.app.ShowError("Test Error", errors.Wrap(err, "failed to execute workflow"))
 			return
 		}
 
@@ -1212,17 +1213,17 @@ func (w *WorkflowWizard) addNewCondition() {
 		if add {
 			// Create new condition based on form values
 			if conditionTypeSelect.Selected == "" {
-				w.app.ShowError("Missing condition type", fmt.Errorf("please select a condition type"))
+				w.app.ShowError("Missing condition type", errors.New("please select a condition type"))
 				return
 			}
 
 			if operatorSelect.Selected == "" {
-				w.app.ShowError("Missing operator", fmt.Errorf("please select an operator"))
+				w.app.ShowError("Missing operator", errors.New("please select an operator"))
 				return
 			}
 
 			if valueEntry.Text == "" {
-				w.app.ShowError("Missing value", fmt.Errorf("please enter a value"))
+				w.app.ShowError("Missing value", errors.New("please enter a value"))
 				return
 			}
 
@@ -1252,7 +1253,7 @@ func (w *WorkflowWizard) addNewCondition() {
 			case "Custom":
 				condType = types.CustomCondition
 			default:
-				w.app.ShowError("Invalid condition type", fmt.Errorf("please select a valid condition type"))
+				w.app.ShowError("Invalid condition type", errors.New("please select a valid condition type"))
 				return
 			}
 
@@ -1276,7 +1277,7 @@ func (w *WorkflowWizard) addNewCondition() {
 			case "Matches Regex":
 				operator = types.MatchesRegex
 			default:
-				w.app.ShowError("Invalid operator", fmt.Errorf("please select a valid operator"))
+				w.app.ShowError("Invalid operator", errors.New("please select a valid operator"))
 				return
 			}
 
@@ -1333,7 +1334,7 @@ func (w *WorkflowWizard) addNewAction() {
 		if add {
 			// Validate inputs
 			if actionTypeSelect.Selected == "" {
-				w.app.ShowError("Missing action type", fmt.Errorf("please select an action type"))
+				w.app.ShowError("Missing action type", errors.New("please select an action type"))
 				return
 			}
 
@@ -1353,7 +1354,7 @@ func (w *WorkflowWizard) addNewAction() {
 			case "Execute":
 				actionType = types.ExecuteAction
 			default:
-				w.app.ShowError("Invalid action type", fmt.Errorf("please select a valid action type"))
+				w.app.ShowError("Invalid action type", errors.New("please select a valid action type"))
 				return
 			}
 
