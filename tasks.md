@@ -590,240 +590,152 @@ Before proceeding with new work, I've analyzed the current state of the codebase
 
 #### 4.3.1 Content-Based Analysis System
 
-1. Extend database schema for content analysis:
-   ```sql
-   -- Content signatures table for storing file content analysis
-   CREATE TABLE IF NOT EXISTS content_signatures (
-       file_path TEXT PRIMARY KEY,
-       mime_type TEXT NOT NULL,
-       content_hash TEXT NOT NULL,
-       keywords_json TEXT,
-       metadata_json TEXT,
-       signature_data_json TEXT NOT NULL,
-       created_at TEXT NOT NULL,
-       updated_at TEXT NOT NULL
-   );
+##### 4.3.1.1 Semantic File Relationship Detection
 
-   -- Content similarities table for tracking relationships
-   CREATE TABLE IF NOT EXISTS content_similarities (
-       file_path1 TEXT NOT NULL,
-       file_path2 TEXT NOT NULL,
-       similarity_score REAL NOT NULL,
-       compared_at TEXT NOT NULL,
-       PRIMARY KEY (file_path1, file_path2)
-   );
+The content-based analysis system will be enhanced to provide semantic understanding of relationships between files. This will involve deeper analysis of content beyond basic signatures to identify meaningful connections between files.
 
-   -- Content relationship groups
-   CREATE TABLE IF NOT EXISTS content_groups (
-       id TEXT PRIMARY KEY,
-       name TEXT NOT NULL,
-       description TEXT NOT NULL,
-       primary_keywords_json TEXT NOT NULL,
-       confidence REAL NOT NULL,
-       created_at TEXT NOT NULL
-   );
+**Requirements:**
 
-   -- Files in content groups
-   CREATE TABLE IF NOT EXISTS content_group_members (
-       group_id TEXT NOT NULL,
-       file_path TEXT NOT NULL,
-       confidence REAL NOT NULL,
-       PRIMARY KEY (group_id, file_path),
-       FOREIGN KEY (group_id) REFERENCES content_groups(id)
-   );
-   ```
+1. **Advanced Content Understanding**
+   - Text Analysis: Implement NLP techniques to extract semantic meaning from text files
+   - Image Analysis: Implement perceptual hashing and feature extraction for visual similarity
+   - Document Analysis: Extract and analyze content from PDFs and Office documents
+   - Audio/Video Analysis: Implement acoustic fingerprinting and feature extraction
+   - Binary Analysis: Implement fuzzy hashing for binary similarity detection
 
-2. Create file content analyzer infrastructure:
+2. **Relationship Types to Detect**
+   - Content-based relationships: Files with similar content but different formats
+   - Semantic relationships: Files about the same topic or concept
+   - Derivative relationships: Files created from other files (e.g., compressed versions)
+   - Sequential relationships: Files that are part of a sequence (e.g., chapters, episodes)
+   - Versioning relationships: Files that are different versions of the same document
+
+3. **Semantic Grouping**
+   - Topic clustering: Group files by subject matter or topic
+   - Project detection: Identify files likely related to the same project
+   - Temporal sequences: Detect files that form a chronological sequence
+   - Version history: Track different versions of the same content
+
+**Implementation:**
+
+1. **Advanced Content Analysis Libraries**
+   - Text Analysis:
+     ```go
+     // Implement NLP analysis using advanced libraries
+     import (
+         "github.com/jdkato/prose/tokenize"
+         "github.com/bbalet/stopwords"
+         "github.com/james-bowman/nlp"
+     )
+
+     func analyzeTextSemantics(content string) (map[string]float64, error) {
+         // Remove stopwords
+         cleanText := stopwords.CleanString(content, "en", true)
+
+         // Tokenize
+         tokenizer := tokenize.NewTreebankWordTokenizer()
+         tokens := tokenizer.Tokenize(cleanText)
+
+         // Create vector representation
+         // ...
+
+         return semanticMap, nil
+     }
+     ```
+
+   - Image Analysis:
+     ```go
+     // Implement perceptual hashing for image similarity
+     import (
+         "github.com/corona10/goimagehash"
+         "image"
+     )
+
+     func calculateImageHash(img image.Image) (string, error) {
+         hash, err := goimagehash.PerceptionHash(img)
+         if err != nil {
+             return "", err
+         }
+         return hash.ToString(), nil
+     }
+     ```
+
+   - Document Analysis:
+     ```go
+     // Extract text from PDF documents
+     import (
+         "github.com/unidoc/unipdf/model"
+     )
+
+     func extractPDFText(pdfPath string) (string, error) {
+         // Extract text from PDF
+         // ...
+
+         return extractedText, nil
+     }
+     ```
+
+2. **Relationship Detection Engine**
    ```go
-   // ContentSignature represents a file's content metadata
-   type ContentSignature struct {
-       FilePath     string                 `json:"file_path"`
-       MimeType     string                 `json:"mime_type"`
-       ContentHash  string                 `json:"content_hash"`
-       Keywords     []string               `json:"keywords"`
-       Metadata     map[string]string      `json:"metadata"`
-       FrequencyMap map[string]int         `json:"frequency_map"`
-       SignatureData map[string]interface{} `json:"signature_data"`
-       CreatedAt    time.Time              `json:"created_at"`
-       UpdatedAt    time.Time              `json:"updated_at"`
-   }
-
-   // ContentAnalyzer generates signatures from file content
-   type ContentAnalyzer interface {
-       AnalyzeFile(filePath string) (*ContentSignature, error)
-       CompareSignatures(sig1, sig2 *ContentSignature) (float64, error)
-       ExtractKeywords(content []byte) ([]string, error)
-       GenerateContentHash(content []byte) (string, error)
+   // Define a relationship detector interface
+   type RelationshipDetector interface {
+       DetectRelationships(sourceFile string, candidateFiles []string) ([]*FileRelationship, error)
+       CalculateRelationshipStrength(file1, file2 string) (float64, string, error)
+       GroupRelatedFiles(files []string, minSimilarity float64) ([]*ContentGroup, error)
    }
    ```
 
-3. Implement MIME type detection with appropriate Go libraries:
-   ```go
-   import "github.com/gabriel-vasile/mimetype"
+3. **Integration with Classification System**
+   - Enhance the `ClassifyFile` method to incorporate semantic relationship data
+   - Update rule suggestions to leverage file relationship information
+   - Create new classification criteria based on file relationships
 
-   // MIMETypeDetector detects file MIME types
-   type MIMETypeDetector struct{}
+**Database Schema Extension:**
+```sql
+-- Semantic content features table for advanced analysis results
+CREATE TABLE IF NOT EXISTS semantic_features (
+    signature_id TEXT PRIMARY KEY,
+    feature_type TEXT NOT NULL,
+    feature_data BLOB NOT NULL,
+    extracted_at TEXT NOT NULL,
+    FOREIGN KEY (signature_id) REFERENCES content_signatures(id)
+);
 
-   // DetectFile determines the MIME type of a file
-   func (d *MIMETypeDetector) DetectFile(filePath string) (string, error) {
-       mime, err := mimetype.DetectFile(filePath)
-       if err != nil {
-           return "", errors.NewFileError("failed to detect MIME type", filePath, errors.FileOperationFailed, err)
-       }
-       return mime.String(), nil
-   }
-   ```
+-- Semantic relationships between files
+CREATE TABLE IF NOT EXISTS semantic_relationships (
+    id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    relationship_type TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (source_id) REFERENCES content_signatures(id),
+    FOREIGN KEY (target_id) REFERENCES content_signatures(id)
+);
 
-4. Implement content analysis for different file types:
-   - Text files (using NLP techniques)
-   - Image files (using metadata and potentially color analysis)
-   - Document files (PDF, Office docs)
-   - Audio/video files (metadata extraction)
-   - Binary files (header analysis, basic signatures)
+-- Topic clusters for semantic grouping
+CREATE TABLE IF NOT EXISTS topic_clusters (
+    id TEXT PRIMARY KEY,
+    topic_name TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    keywords_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
-5. Implement content similarity engine:
-   ```go
-   // SimilarityEngine calculates relationships between files based on content
-   type SimilarityEngine struct {
-       repo Repository
-       analyzer ContentAnalyzer
-       thresholds map[string]float64
-   }
+-- File membership in topic clusters
+CREATE TABLE IF NOT EXISTS topic_members (
+    cluster_id TEXT NOT NULL,
+    signature_id TEXT NOT NULL,
+    relevance_score REAL NOT NULL,
+    PRIMARY KEY (cluster_id, signature_id),
+    FOREIGN KEY (cluster_id) REFERENCES topic_clusters(id),
+    FOREIGN KEY (signature_id) REFERENCES content_signatures(id)
+);
+```
 
-   // FindRelatedFiles identifies files related to a given file
-   func (e *SimilarityEngine) FindRelatedFiles(filePath string, minSimilarity float64) ([]*ContentSimilarity, error) {
-       // Get signature for source file
-       sourceSig, err := e.getOrCreateSignature(filePath)
-       if err != nil {
-           return nil, err
-       }
-
-       // Query existing signatures
-       allSigs, err := e.repo.GetAllContentSignatures(1000)
-       if err != nil {
-           return nil, err
-       }
-
-       var similarities []*ContentSimilarity
-
-       // Calculate similarities
-       for _, targetSig := range allSigs {
-           if targetSig.FilePath == filePath {
-               continue
-           }
-
-           score, err := e.analyzer.CompareSignatures(sourceSig, targetSig)
-           if err != nil {
-               continue
-           }
-
-           if score >= minSimilarity {
-               similarities = append(similarities, &ContentSimilarity{
-                   FilePath1: sourceSig.FilePath,
-                   FilePath2: targetSig.FilePath,
-                   Score: score,
-                   ComparedAt: time.Now(),
-               })
-           }
-       }
-
-       return similarities, nil
-   }
-   ```
-
-6. Create content relationship discovery process:
-   ```go
-   // ContentRelationshipDiscovery finds groups of related files
-   type ContentRelationshipDiscovery struct {
-       repo Repository
-       similarityEngine *SimilarityEngine
-       minGroupSize int
-       minSimilarityScore float64
-   }
-
-   // DiscoverRelationships identifies content relationships across the system
-   func (d *ContentRelationshipDiscovery) DiscoverRelationships() ([]*ContentGroup, error) {
-       // Get all content similarities above threshold
-       similarities, err := d.repo.GetContentSimilarities(d.minSimilarityScore)
-       if err != nil {
-           return nil, err
-       }
-
-       // Build graph of relationships
-       graph := d.buildRelationshipGraph(similarities)
-
-       // Use clustering algorithm to find groups
-       groups := d.findContentGroups(graph)
-
-       // Save discovered groups
-       for _, group := range groups {
-           if err := d.repo.SaveContentGroup(group); err != nil {
-               continue
-           }
-       }
-
-       return groups, nil
-   }
-   ```
-
-7. Integrate content analysis into the file classification process:
-   ```go
-   // UpdateClassifyFile to include content-based classification
-   func (e *Engine) ClassifyFile(filePath string) ([]*ClassificationMatch, error) {
-       // ... existing code ...
-
-       // Add content-based analysis
-       contentSignature, _ := e.contentAnalyzer.AnalyzeFile(filePath)
-       if contentSignature != nil {
-           // Store the signature for future reference
-           e.repo.SaveContentSignature(contentSignature)
-
-           // Match content signature against classification criteria
-           for _, classification := range classifications {
-               // Calculate content match confidence
-               contentConfidence := e.calculateContentMatch(contentSignature, classification.Criteria)
-
-               // Add content confidence to overall score (50% weight)
-               confidence += 0.5 * contentConfidence
-           }
-       }
-
-       // ... existing code ...
-   }
-   ```
-
-8. Leverage existing Go libraries:
-   - `github.com/gabriel-vasile/mimetype` for MIME detection
-   - `github.com/jdkato/prose` for NLP and text analysis
-   - `github.com/disintegration/imaging` for image analysis
-   - `github.com/dhowden/tag` for audio file metadata
-   - `gonum.org/v1/gonum/stat` for statistical analysis of content
-   - `github.com/sajari/docconv` for document conversion/text extraction
-
-9. Implement periodic content analysis for enhanced pattern detection:
-   ```go
-   // Add to Engine.PerformAnalysis
-   func (e *Engine) PerformAnalysis() error {
-       // ... existing code ...
-
-       // Perform content relationship discovery
-       if e.config.ContentAnalysisEnabled {
-           contentGroups, err := e.contentDiscovery.DiscoverRelationships()
-           if err != nil {
-               e.logger.With(log.F("error", err)).Warn("Content relationship discovery failed")
-           } else {
-               e.logger.With(log.F("groupCount", len(contentGroups))).Info("Discovered content relationships")
-
-               // Generate content-based rule suggestions
-               if err := e.generateContentBasedRules(contentGroups); err != nil {
-                   e.logger.With(log.F("error", err)).Warn("Failed to generate content-based rules")
-               }
-           }
-       }
-
-       // ... existing code ...
-   }
-   ```
+This semantic relationship system will significantly enhance the Smart Rule Learning by providing deeper understanding of file relationships, leading to more intelligent organization suggestions and pattern detection.
 
 #### 4.4 Feedback Mechanism
 1. Design comprehensive feedback system:
@@ -897,6 +809,273 @@ Before proceeding with new work, I've analyzed the current state of the codebase
    - UUID generation for unique identifiers
    - JSON for criteria serialization/deserialization
 
+### 5. Comprehensive Observability System
+**Objective**: Implement a robust observability system throughout the entire Sortd application to provide users with clear visibility into all operations and progress.
+
+**Tasks**:
+- [ ] Design a comprehensive observability architecture
+- [ ] Implement real-time progress tracking for all file operations
+- [ ] Create detailed activity logging with structured data
+- [ ] Develop visual indicators for operation status
+- [ ] Build a dashboard for operation monitoring
+
+**Implementation Steps**:
+
+#### 5.1 Core Observability Architecture
+1. Design the observability framework:
+   ```go
+   // Observability provides tracking for all operations
+   type Observability interface {
+       // StartOperation begins tracking a named operation with expected total items
+       StartOperation(name string, totalItems int) OperationTracker
+
+       // LogAction records a specific action with context
+       LogAction(category string, message string, fields ...Field)
+
+       // GetRecentActivity returns recent actions
+       GetRecentActivity(limit int) []Activity
+   }
+
+   // OperationTracker tracks progress of a single operation
+   type OperationTracker interface {
+       // Update increments the progress counter and returns completion percentage
+       Update(increment int) (completed int, total int, percentage float64)
+
+       // AddDetail adds contextual information to the operation
+       AddDetail(key string, value interface{})
+
+       // Complete marks the operation as finished
+       Complete()
+
+       // Failed marks the operation as failed with error
+       Failed(err error)
+   }
+   ```
+
+2. Create implementations for different contexts:
+   - CLIObservability: Provides progress bars and console logging
+   - WebObservability: Enables real-time updates via SSE for web interfaces
+   - APIObservability: Returns structured data for API clients
+   - FileObservability: Logs all activities to rotating log files
+
+3. Implement observability provider:
+   ```go
+   // New creates an observability provider appropriate for the context
+   func NewObservability(ctx context.Context, config *ObservabilityConfig) Observability {
+       // Determine context (CLI, Web, API, etc.)
+       if isWebContext(ctx) {
+           return NewWebObservability(config)
+       } else if isAPIContext(ctx) {
+           return NewAPIObservability(config)
+       } else {
+           return NewCLIObservability(config)
+       }
+   }
+   ```
+
+#### 5.2 Progress Tracking System
+1. Implement operation trackers for different contexts:
+   - **CLI Progress Bar**: Using libraries like progressbar or go-pretty
+   - **Web Progress Updates**: Using Server-Sent Events for real-time updates
+   - **Status Files**: For tracking long-running operations
+
+2. Create a generic progress tracking framework:
+   ```go
+   // Operation represents a tracked operation
+   type Operation struct {
+       ID          string
+       Name        string
+       Started     time.Time
+       Updated     time.Time
+       Completed   time.Time
+       Total       int
+       Current     int
+       Percentage  float64
+       Status      string // "running", "completed", "failed"
+       Details     map[string]interface{}
+       Error       string
+   }
+
+   // TrackOperation wraps any operation with progress tracking
+   func (o *StandardObservability) TrackOperation(name string, totalItems int) OperationTracker {
+       op := &Operation{
+           ID:      uuid.New().String(),
+           Name:    name,
+           Started: time.Now(),
+           Total:   totalItems,
+           Status:  "running",
+           Details: make(map[string]interface{}),
+       }
+
+       o.activeOperations.Store(op.ID, op)
+       o.notifyListeners(op)
+
+       return &operationTracker{
+           operation: op,
+           parent:    o,
+       }
+   }
+   ```
+
+3. Implement hooks throughout the codebase:
+   - Add to file operations in organize package
+   - Add to workflow execution
+   - Add to learning system operations
+   - Add to batch processing
+
+#### 5.3 Activity Logging System
+1. Define structured activity logs:
+   ```go
+   // Activity represents a logged action
+   type Activity struct {
+       Timestamp time.Time
+       Category  string
+       Message   string
+       Fields    map[string]interface{}
+   }
+   ```
+
+2. Implement logging with context:
+   ```go
+   // LogAction records a specific action with context
+   func (o *StandardObservability) LogAction(category string, message string, fields ...Field) {
+       activity := Activity{
+           Timestamp: time.Now(),
+           Category:  category,
+           Message:   message,
+           Fields:    make(map[string]interface{}),
+       }
+
+       // Add fields to the activity
+       for _, field := range fields {
+           activity.Fields[field.Key] = field.Value
+       }
+
+       // Store in recent activities buffer
+       o.recentActivities.Add(activity)
+
+       // Notify listeners
+       o.notifyActivityListeners(activity)
+
+       // Log to file/console depending on context
+       o.logger.With(
+          log.F("category", category),
+          transformFields(fields)...,
+       ).Info(message)
+   }
+   ```
+
+3. Create activity categories for different operations:
+   - `FILE_OPERATION`: File moves, copies, and deletions
+   - `ORGANIZATION`: Pattern matching and organization actions
+   - `CLASSIFICATION`: File classification operations
+   - `WORKFLOW`: Workflow execution steps
+   - `SYSTEM`: System-level operations
+   - `ERROR`: Error conditions
+   - `SECURITY`: Security-related events
+
+#### 5.4 Visual Indicators
+1. Implement CLI visual indicators:
+   - Progress bars for file operations
+   - Spinners for indeterminate operations
+   - Color-coded status messages
+
+2. Design web UI components:
+   - Real-time progress bars
+   - Activity feed with filtering
+   - Operation dashboard
+   - Status indicators
+
+3. Create notification system for important events:
+   - Operation completion notifications
+   - Error alerts
+   - System status changes
+
+#### 5.5 Usage Examples
+1. Tracking file organization:
+   ```go
+   // In organize.Engine.OrganizeByPatterns:
+   tracker := o.observability.TrackOperation("File Organization", len(files))
+   defer tracker.Complete()
+
+   for i, file := range files {
+       // Process file...
+
+       // Update progress after each file
+       tracker.Update(1)
+
+       // Log specific action
+       o.observability.LogAction("FILE_OPERATION", "Organized file",
+           log.F("source", file),
+           log.F("destination", destPath),
+           log.F("pattern", matchedPattern),
+       )
+   }
+   ```
+
+2. Tracking workflow execution:
+   ```go
+   // In workflow.Manager.ExecuteWorkflow:
+   tracker := o.observability.TrackOperation("Workflow: " + workflow.Name, len(workflow.Actions))
+   defer tracker.Complete()
+
+   for i, action := range workflow.Actions {
+       // Log workflow step
+       o.observability.LogAction("WORKFLOW", "Executing workflow step",
+           log.F("workflow", workflow.Name),
+           log.F("step", i+1),
+           log.F("action", action.Type),
+       )
+
+       // Execute action...
+
+       // Update progress
+       tracker.Update(1)
+   }
+   ```
+
+3. Tracking learning system operations:
+   ```go
+   // In learning.Engine.PerformAnalysis:
+   tracker := o.observability.TrackOperation("Pattern Analysis", estimatedOperations)
+   defer tracker.Complete()
+
+   // Get operations to analyze
+   operations, err := e.repo.GetRecentOperations(30, 1000)
+   if err != nil {
+       tracker.Failed(err)
+       return err
+   }
+
+   // Update with actual count
+   tracker.AddDetail("actualOperations", len(operations))
+
+   // Process operations...
+   for i, op := range operations {
+       // Analyze operation...
+
+       // Update progress periodically (e.g., every 10 operations)
+       if i%10 == 0 {
+           tracker.Update(10)
+       }
+   }
+   ```
+
+#### 5.6 Integration with Sandbox Environment
+1. Extend the Docker sandbox environment to showcase observability features:
+   - Display real-time progress in sandbox CLI
+   - Provide web UI access to operation dashboard
+   - Demonstrate activity logging
+   - Show notification system
+
+2. Create sandbox examples demonstrating different observability features:
+   - Batch file organization with progress tracking
+   - Long-running workflow execution with status updates
+   - Error handling and notification
+   - Classification and learning visualization
+
+This comprehensive observability system will ensure users always have full visibility into what Sortd is doing, enhancing trust and providing clear feedback for all operations.
+
 ## Implementation Timeline (Refined)
 
 ### Week 1: Foundation and Core Architecture
@@ -924,19 +1103,19 @@ Before proceeding with new work, I've analyzed the current state of the codebase
    - [ ] Create confidence scoring system
    - [ ] Build classification matching algorithm
 3. Implement content-based analysis system
-   - [ ] Create content signature generation
-   - [ ] Implement MIME type detection
-   - [ ] Build text content analysis (keywords, frequency maps)
-   - [ ] Develop image content analysis (metadata, color histograms)
-   - [ ] Set up document content extraction
-   - [ ] Create content signature storage
+   - [x] Create content signature generation
+   - [x] Implement MIME type detection
+   - [x] Build text content analysis (keywords, frequency maps)
+   - [x] Develop image content analysis (metadata, color histograms)
+   - [x] Set up document content extraction
+   - [x] Create content signature storage
 
 #### Week 3: Content Analysis and Learning Engine
 1. Extend content analysis capabilities
-   - [ ] Implement content similarity engine
-   - [ ] Create content relationship discovery
-   - [ ] Build content group detection
-   - [ ] Integrate content analysis with classification
+   - [x] Implement content similarity engine
+   - [x] Create content relationship discovery
+   - [x] Build content group detection
+   - [x] Integrate content analysis with classification
 2. Complete pattern learning system
    - [ ] Implement pattern consolidation
    - [ ] Build pattern weighting system
@@ -945,23 +1124,24 @@ Before proceeding with new work, I've analyzed the current state of the codebase
    - [ ] Create rule suggestion engine
    - [ ] Build rule template system
    - [ ] Implement rule confidence scoring
-   - [ ] Develop content-based rule generation
+   - [x] Develop content-based rule generation
 
-#### Week 4: Feedback System and Integration
-1. Implement feedback mechanism
-   - [ ] Create feedback collection system
-   - [ ] Build reinforcement learning for patterns
-   - [ ] Implement user preference tracking
-2. Integrate with main application
-   - [ ] Add hooks in organize engine
-   - [ ] Create analysis triggers on file operations
-   - [ ] Build UI elements for rule suggestions
-   - [ ] Implement workflow suggestion feature
-3. Test and refine
-   - [ ] Create comprehensive test suite
-   - [ ] Perform performance optimization
-   - [ ] Refine confidence scoring algorithm
-   - [ ] Polish user experience for suggestions
+#### Week 4: Integration and Testing
+1. Implement engine integration
+   - [x] Create integration between learning engine and organize engine
+   - [x] Implement EngineAdapter for learning system
+   - [x] Add content-based classification to file organization
+   - [x] Track file operations for learning
+2. Set up testing framework
+   - [ ] Create unit tests for learning engine
+   - [ ] Implement integration tests for engine adapter
+   - [ ] Create Docker-based testing environment
+   - [ ] Set up performance benchmarks
+3. Comprehensive testing
+   - [ ] Test with various file types (text, images, documents, etc.)
+   - [ ] Test content relationship detection
+   - [ ] Test classification-based organization
+   - [ ] Test performance with large file sets
 
 ## Next Immediate Tasks
 
@@ -993,17 +1173,20 @@ To continue making progress on the Smart Rule Learning feature, we should focus 
    - Create the main learning engine in `engine.go` ✅
    - Implement the operation tracking functionality ✅
    - Add periodic analysis scheduling ✅
+   - Implement the ClassifyFile functionality ✅
+   - Integrate content analysis with classification ✅
 
-7. **Fix Dependencies and Error Handling**
-   - Add missing dependencies (go-sqlite3, uuid) ✅
-   - Fix error handling implementation in repository ✅
-   - Fix logger parameter handling ✅
+7. **Integration with Existing Systems**
+   - Create integration helpers between learning and organize engines ✅
+   - Update EngineAdapter to support content-based classification ✅
+   - Implement operation tracking in file move operations ✅
+   - Add daemon support for learning engine initialization ✅
 
-8. **Next Steps for Implementation**
-   - Implement the pattern detector component
-   - Create the file classifier component
-   - Implement the suggestion generator
-   - Add hooks in the organize engine to track operations
+8. **Testing Implementation**
+   - Create comprehensive unit tests for all components
+   - Set up Docker-based testing environment
+   - Test with various real-world file types
+   - Benchmark performance with large datasets
 
 ## Progress Tracking
 

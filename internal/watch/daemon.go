@@ -13,7 +13,7 @@ import (
 
 	"sortd/internal/config"
 	"sortd/internal/errors"
-	"sortd/internal/organize"
+	"sortd/internal/patterns/learning"
 	"sortd/pkg/workflow"
 )
 
@@ -34,7 +34,7 @@ type Daemon struct {
 	watcher *fsnotify.Watcher
 
 	// Organize engine adapter
-	engine *organize.Engine
+	engine *EngineAdapter
 
 	// Workflow manager for advanced file processing
 	workflowManager *workflow.Manager
@@ -70,8 +70,8 @@ func NewDaemon(cfg *config.Config) (*Daemon, error) {
 		return nil, errors.Wrap(err, "failed to create fsnotify watcher")
 	}
 
-	// Create the organization engine using the correct constructor
-	engine := organize.NewWithConfig(cfg)
+	// Create the engine adapter
+	engineAdapter := NewEngineAdapter(cfg)
 
 	// Initialize the workflow manager
 	home, err := os.UserHomeDir()
@@ -98,7 +98,7 @@ func NewDaemon(cfg *config.Config) (*Daemon, error) {
 	return &Daemon{
 		config:              cfg,
 		watcher:             watcher,
-		engine:              engine,
+		engine:              engineAdapter,
 		workflowManager:     workflowManager,
 		processed:           0,
 		lastActivity:        time.Now(), // Initialize lastActivity
@@ -386,42 +386,72 @@ func (d *Daemon) OrganizeFile(filePath string) (string, error) {
 	return "", nil
 }
 
-// NewDaemonWithWorkflowPath creates a new daemon with a custom workflow directory path
-// This is primarily used for testing purposes
+// NewDaemonWithWorkflowPath creates a new daemon with a custom workflow path
 func NewDaemonWithWorkflowPath(cfg *config.Config, workflowPath string) (*Daemon, error) {
 	// Create a watcher using fsnotify
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create fsnotify watcher: %w", err)
+		return nil, errors.Wrap(err, "failed to create fsnotify watcher")
 	}
 
-	// Create the organization engine using the correct constructor
-	engine := organize.NewWithConfig(cfg)
+	// Create the engine adapter
+	engineAdapter := NewEngineAdapter(cfg)
 
-	// Create workflows directory if it doesn't exist
-	if err := os.MkdirAll(workflowPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create workflows directory: %w", err)
-	}
-
-	// Initialize workflow manager with the specified path
+	// Initialize workflow manager with the custom path
 	workflowManager, err := workflow.NewManager(workflowPath)
 	if err != nil {
-		log.LogWithFields(log.F("error", err)).Warn("Failed to initialize workflow manager")
-		// Continue without workflow manager - don't fail the daemon initialization
+		log.LogWithFields(log.F("error", err), log.F("path", workflowPath)).Warn("Failed to initialize workflow manager")
+		// Continue without workflow manager
 		workflowManager = nil
 	}
 
 	return &Daemon{
 		config:              cfg,
 		watcher:             watcher,
-		engine:              engine,
+		engine:              engineAdapter,
 		workflowManager:     workflowManager,
 		processed:           0,
 		lastActivity:        time.Now(),
 		callback:            nil,
 		requireConfirmation: false,
 		running:             false,
-		eventChan:           make(chan string, 100), // Buffer for 100 events
-		numWorkers:          4,                      // Default to 4 workers
+		eventChan:           make(chan string, 100),
+		numWorkers:          4,
 	}, nil
+}
+
+// SetupLearningEngine initializes the smart rule learning engine
+func (d *Daemon) SetupLearningEngine(dbPath string) error {
+	if d.engine == nil {
+		return fmt.Errorf("engine adapter not initialized")
+	}
+
+	// Create a logger for the learning engine
+	logger := log.LogWithFields(log.F("component", "learning_engine"))
+
+	// Set up learning config
+	learningConfig := learning.DefaultConfig()
+	learningConfig.DatabasePath = dbPath
+
+	// Initialize database connection and repository
+	repo, err := learning.NewSQLiteRepository(dbPath, logger)
+	if err != nil {
+		logger.With(log.F("error", err)).Error("Failed to initialize learning repository")
+		return err
+	}
+
+	// Create the learning engine
+	learningEngine := learning.NewEngine(repo, learningConfig, logger)
+
+	// Set the learning engine in the adapter
+	d.engine.SetLearningEngine(learningEngine)
+
+	// Start the learning engine
+	if err := learningEngine.Start(); err != nil {
+		logger.With(log.F("error", err)).Error("Failed to start learning engine")
+		return err
+	}
+
+	logger.Info("Content analysis and smart rule learning engine started successfully")
+	return nil
 }
