@@ -47,6 +47,17 @@ const (
 	// Rule error kinds
 	InvalidRule
 	RuleNotFound
+	// Database error kinds
+	DatabaseConnectionFailed
+	DatabaseQueryFailed
+	DatabaseOperationFailed
+	InvalidInputData
+)
+
+// Additional error checks for database errors
+var (
+	ErrDatabaseOperation = NewDatabaseError("database operation failed", nil)
+	ErrInvalidInput      = NewInvalidInputError("invalid input data", nil)
 )
 
 // ApplicationError is the base error type for all application errors
@@ -250,4 +261,103 @@ func IsInvalidRule(err error) bool {
 		return ruleErr.Kind() == InvalidRule
 	}
 	return false
+}
+
+// DatabaseError represents errors related to database operations
+type DatabaseError struct {
+	ApplicationError
+	operation string
+	context   map[string]interface{}
+}
+
+// NewDatabaseError creates a new database error
+func NewDatabaseError(msg string, err error) *DatabaseError {
+	return &DatabaseError{
+		ApplicationError: ApplicationError{
+			msg:  msg,
+			err:  err,
+			kind: DatabaseOperationFailed,
+		},
+		operation: "",
+		context:   make(map[string]interface{}),
+	}
+}
+
+// WithOperation adds operation information to the database error
+func (e *DatabaseError) WithOperation(operation string) *DatabaseError {
+	e.operation = operation
+	return e
+}
+
+// WithContext adds context information to the database error
+func (e *DatabaseError) WithContext(key string, value interface{}) *DatabaseError {
+	e.context[key] = value
+	return e
+}
+
+// Error returns the database error message
+func (e *DatabaseError) Error() string {
+	if e.operation != "" {
+		if e.err != nil {
+			return fmt.Sprintf("%s: operation=%s: %v", e.msg, e.operation, e.err)
+		}
+		return fmt.Sprintf("%s: operation=%s", e.msg, e.operation)
+	}
+	return e.ApplicationError.Error()
+}
+
+// Operation returns the database operation associated with the error
+func (e *DatabaseError) Operation() string {
+	return e.operation
+}
+
+// Context returns the context information associated with the error
+func (e *DatabaseError) Context() map[string]interface{} {
+	return e.context
+}
+
+// InvalidInputError represents errors related to invalid input data
+type InvalidInputError struct {
+	ApplicationError
+	context map[string]interface{}
+}
+
+// NewInvalidInputError creates a new invalid input error
+func NewInvalidInputError(msg string, err error) *InvalidInputError {
+	return &InvalidInputError{
+		ApplicationError: ApplicationError{
+			msg:  msg,
+			err:  err,
+			kind: InvalidInputData,
+		},
+		context: make(map[string]interface{}),
+	}
+}
+
+// WithContext adds context information to the invalid input error
+func (e *InvalidInputError) WithContext(key string, value interface{}) *InvalidInputError {
+	e.context[key] = value
+	return e
+}
+
+// Error returns the invalid input error message
+func (e *InvalidInputError) Error() string {
+	return e.ApplicationError.Error()
+}
+
+// Context returns the context information associated with the error
+func (e *InvalidInputError) Context() map[string]interface{} {
+	return e.context
+}
+
+// IsDatabaseError checks if the error is a database error
+func IsDatabaseError(err error) bool {
+	var dbErr *DatabaseError
+	return errors.As(err, &dbErr)
+}
+
+// IsInvalidInputError checks if the error is an invalid input error
+func IsInvalidInputError(err error) bool {
+	var inputErr *InvalidInputError
+	return errors.As(err, &inputErr)
 }

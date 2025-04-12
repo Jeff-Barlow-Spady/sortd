@@ -41,6 +41,24 @@ func F(key string, value interface{}) Field {
 	return Field{Key: key, Value: value}
 }
 
+// Logging interface defines the logging methods required by consuming packages
+type Logging interface {
+	Info(msg string)
+	Infof(format string, args ...interface{})
+	Debug(msg string)
+	Debugf(format string, args ...interface{})
+	Warn(msg string)
+	Warnf(format string, args ...interface{})
+	Error(msg string)
+	Errorf(format string, args ...interface{})
+	ErrorWithStack(err error, msg string)
+	Fatal(msg string)
+	Fatalf(format string, args ...interface{})
+	With(fields ...Field) Logging
+	WithContext(ctx context.Context) Logging
+	Close() error
+}
+
 // Logger is the main logger structure
 type Logger struct {
 	out     io.Writer
@@ -123,7 +141,7 @@ func NewLogger(opts ...LoggerOption) *Logger {
 }
 
 // With creates a new logger with additional fields
-func (l *Logger) With(fields ...Field) *Logger {
+func (l *Logger) With(fields ...Field) Logging {
 	newLogger := &Logger{
 		out:     l.out,
 		file:    l.file,
@@ -142,7 +160,7 @@ func (l *Logger) With(fields ...Field) *Logger {
 }
 
 // WithContext creates a new logger with context information
-func (l *Logger) WithContext(ctx context.Context) *Logger {
+func (l *Logger) WithContext(ctx context.Context) Logging {
 	// Here you can extract values from context and add them as fields
 	// This is a placeholder for future context-aware logging
 	return l.With()
@@ -213,12 +231,12 @@ func Warnf(format string, args ...interface{}) {
 }
 
 // WithFields creates a new entry with specified fields
-func LogWithFields(fields ...Field) *Logger {
+func LogWithFields(fields ...Field) Logging {
 	return logger.With(fields...)
 }
 
 // WithError creates a new entry with error fields
-func LogWithError(err error) *Logger {
+func LogWithError(err error) Logging {
 	fields := extractErrorFields(err)
 	return logger.With(fields...)
 }
@@ -386,7 +404,9 @@ func (l *Logger) Errorf(format string, args ...interface{}) {
 
 // ErrorWithStack logs an error with its stack trace
 func (l *Logger) ErrorWithStack(err error, msg string) {
-	l.With(F("error", err.Error())).log(LevelError, msg)
+	// Since l.With returns the Logging interface, we need to directly create
+	// a log message with the error field
+	l.With(F("error", err.Error())).Error(msg)
 }
 
 // Fatal logs a fatal message and exits

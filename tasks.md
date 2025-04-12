@@ -588,6 +588,243 @@ Before proceeding with new work, I've analyzed the current state of the codebase
    ';
    ```
 
+#### 4.3.1 Content-Based Analysis System
+
+1. Extend database schema for content analysis:
+   ```sql
+   -- Content signatures table for storing file content analysis
+   CREATE TABLE IF NOT EXISTS content_signatures (
+       file_path TEXT PRIMARY KEY,
+       mime_type TEXT NOT NULL,
+       content_hash TEXT NOT NULL,
+       keywords_json TEXT,
+       metadata_json TEXT,
+       signature_data_json TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL
+   );
+
+   -- Content similarities table for tracking relationships
+   CREATE TABLE IF NOT EXISTS content_similarities (
+       file_path1 TEXT NOT NULL,
+       file_path2 TEXT NOT NULL,
+       similarity_score REAL NOT NULL,
+       compared_at TEXT NOT NULL,
+       PRIMARY KEY (file_path1, file_path2)
+   );
+
+   -- Content relationship groups
+   CREATE TABLE IF NOT EXISTS content_groups (
+       id TEXT PRIMARY KEY,
+       name TEXT NOT NULL,
+       description TEXT NOT NULL,
+       primary_keywords_json TEXT NOT NULL,
+       confidence REAL NOT NULL,
+       created_at TEXT NOT NULL
+   );
+
+   -- Files in content groups
+   CREATE TABLE IF NOT EXISTS content_group_members (
+       group_id TEXT NOT NULL,
+       file_path TEXT NOT NULL,
+       confidence REAL NOT NULL,
+       PRIMARY KEY (group_id, file_path),
+       FOREIGN KEY (group_id) REFERENCES content_groups(id)
+   );
+   ```
+
+2. Create file content analyzer infrastructure:
+   ```go
+   // ContentSignature represents a file's content metadata
+   type ContentSignature struct {
+       FilePath     string                 `json:"file_path"`
+       MimeType     string                 `json:"mime_type"`
+       ContentHash  string                 `json:"content_hash"`
+       Keywords     []string               `json:"keywords"`
+       Metadata     map[string]string      `json:"metadata"`
+       FrequencyMap map[string]int         `json:"frequency_map"`
+       SignatureData map[string]interface{} `json:"signature_data"`
+       CreatedAt    time.Time              `json:"created_at"`
+       UpdatedAt    time.Time              `json:"updated_at"`
+   }
+
+   // ContentAnalyzer generates signatures from file content
+   type ContentAnalyzer interface {
+       AnalyzeFile(filePath string) (*ContentSignature, error)
+       CompareSignatures(sig1, sig2 *ContentSignature) (float64, error)
+       ExtractKeywords(content []byte) ([]string, error)
+       GenerateContentHash(content []byte) (string, error)
+   }
+   ```
+
+3. Implement MIME type detection with appropriate Go libraries:
+   ```go
+   import "github.com/gabriel-vasile/mimetype"
+
+   // MIMETypeDetector detects file MIME types
+   type MIMETypeDetector struct{}
+
+   // DetectFile determines the MIME type of a file
+   func (d *MIMETypeDetector) DetectFile(filePath string) (string, error) {
+       mime, err := mimetype.DetectFile(filePath)
+       if err != nil {
+           return "", errors.NewFileError("failed to detect MIME type", filePath, errors.FileOperationFailed, err)
+       }
+       return mime.String(), nil
+   }
+   ```
+
+4. Implement content analysis for different file types:
+   - Text files (using NLP techniques)
+   - Image files (using metadata and potentially color analysis)
+   - Document files (PDF, Office docs)
+   - Audio/video files (metadata extraction)
+   - Binary files (header analysis, basic signatures)
+
+5. Implement content similarity engine:
+   ```go
+   // SimilarityEngine calculates relationships between files based on content
+   type SimilarityEngine struct {
+       repo Repository
+       analyzer ContentAnalyzer
+       thresholds map[string]float64
+   }
+
+   // FindRelatedFiles identifies files related to a given file
+   func (e *SimilarityEngine) FindRelatedFiles(filePath string, minSimilarity float64) ([]*ContentSimilarity, error) {
+       // Get signature for source file
+       sourceSig, err := e.getOrCreateSignature(filePath)
+       if err != nil {
+           return nil, err
+       }
+
+       // Query existing signatures
+       allSigs, err := e.repo.GetAllContentSignatures(1000)
+       if err != nil {
+           return nil, err
+       }
+
+       var similarities []*ContentSimilarity
+
+       // Calculate similarities
+       for _, targetSig := range allSigs {
+           if targetSig.FilePath == filePath {
+               continue
+           }
+
+           score, err := e.analyzer.CompareSignatures(sourceSig, targetSig)
+           if err != nil {
+               continue
+           }
+
+           if score >= minSimilarity {
+               similarities = append(similarities, &ContentSimilarity{
+                   FilePath1: sourceSig.FilePath,
+                   FilePath2: targetSig.FilePath,
+                   Score: score,
+                   ComparedAt: time.Now(),
+               })
+           }
+       }
+
+       return similarities, nil
+   }
+   ```
+
+6. Create content relationship discovery process:
+   ```go
+   // ContentRelationshipDiscovery finds groups of related files
+   type ContentRelationshipDiscovery struct {
+       repo Repository
+       similarityEngine *SimilarityEngine
+       minGroupSize int
+       minSimilarityScore float64
+   }
+
+   // DiscoverRelationships identifies content relationships across the system
+   func (d *ContentRelationshipDiscovery) DiscoverRelationships() ([]*ContentGroup, error) {
+       // Get all content similarities above threshold
+       similarities, err := d.repo.GetContentSimilarities(d.minSimilarityScore)
+       if err != nil {
+           return nil, err
+       }
+
+       // Build graph of relationships
+       graph := d.buildRelationshipGraph(similarities)
+
+       // Use clustering algorithm to find groups
+       groups := d.findContentGroups(graph)
+
+       // Save discovered groups
+       for _, group := range groups {
+           if err := d.repo.SaveContentGroup(group); err != nil {
+               continue
+           }
+       }
+
+       return groups, nil
+   }
+   ```
+
+7. Integrate content analysis into the file classification process:
+   ```go
+   // UpdateClassifyFile to include content-based classification
+   func (e *Engine) ClassifyFile(filePath string) ([]*ClassificationMatch, error) {
+       // ... existing code ...
+
+       // Add content-based analysis
+       contentSignature, _ := e.contentAnalyzer.AnalyzeFile(filePath)
+       if contentSignature != nil {
+           // Store the signature for future reference
+           e.repo.SaveContentSignature(contentSignature)
+
+           // Match content signature against classification criteria
+           for _, classification := range classifications {
+               // Calculate content match confidence
+               contentConfidence := e.calculateContentMatch(contentSignature, classification.Criteria)
+
+               // Add content confidence to overall score (50% weight)
+               confidence += 0.5 * contentConfidence
+           }
+       }
+
+       // ... existing code ...
+   }
+   ```
+
+8. Leverage existing Go libraries:
+   - `github.com/gabriel-vasile/mimetype` for MIME detection
+   - `github.com/jdkato/prose` for NLP and text analysis
+   - `github.com/disintegration/imaging` for image analysis
+   - `github.com/dhowden/tag` for audio file metadata
+   - `gonum.org/v1/gonum/stat` for statistical analysis of content
+   - `github.com/sajari/docconv` for document conversion/text extraction
+
+9. Implement periodic content analysis for enhanced pattern detection:
+   ```go
+   // Add to Engine.PerformAnalysis
+   func (e *Engine) PerformAnalysis() error {
+       // ... existing code ...
+
+       // Perform content relationship discovery
+       if e.config.ContentAnalysisEnabled {
+           contentGroups, err := e.contentDiscovery.DiscoverRelationships()
+           if err != nil {
+               e.logger.With(log.F("error", err)).Warn("Content relationship discovery failed")
+           } else {
+               e.logger.With(log.F("groupCount", len(contentGroups))).Info("Discovered content relationships")
+
+               // Generate content-based rule suggestions
+               if err := e.generateContentBasedRules(contentGroups); err != nil {
+                   e.logger.With(log.F("error", err)).Warn("Failed to generate content-based rules")
+               }
+           }
+       }
+
+       // ... existing code ...
+   }
+   ```
+
 #### 4.4 Feedback Mechanism
 1. Design comprehensive feedback system:
    - Acceptance/rejection tracking
@@ -629,45 +866,153 @@ Before proceeding with new work, I've analyzed the current state of the codebase
    - System reset capabilities
 5. Implement notification system for high-confidence suggestions and classifications
 
-## Implementation Timeline (Adjusted)
+#### 4.6 Implementation Strategy
+1. **Phase 1: Core Infrastructure (Current Focus)**
+   - Setup module structure and database schema ✅
+   - Implement SQLite with Go embed integration 🔄
+   - Create baseline classifications ✅
+   - Implement persistence layer interfaces ✅
 
-### Week 1: Error Handling and Workflow Completion
-- Days 1-2: Error handling audit and standardization ✅
-- Days 3-4: Complete workflow execution functionality ✅
-- Day 5: Testing and documentation
+2. **Phase 2: Operation Tracking & Analysis**
+   - Integrate tracking hooks in organize engine
+   - Add operation metrics collection
+   - Implement file classification engine
+   - Create basic pattern detection
 
-### Week 2: Logging Consistency and Initial Smart Rule Design
-- Days 1-2: Logging consistency implementation ✅
-- Days 3-5: Design and foundation implementation of Smart Rule Learning
-  - Create pattern learning module structure with SQLite support (Day 3) ✅
-  - Define database schema for operations, patterns, and classifications (Day 4) ✅
-  - Implement basic persistence layer with Go embed for SQLite (Day 5) 🔄
+3. **Phase 3: Rule Generation & Learning**
+   - Implement rule generation from patterns
+   - Create confidence scoring system
+   - Build pattern consolidation logic
+   - Implement feedback-based refinement
 
-### Week 3: Smart Rule Learning Implementation
-- Days 1-2: File operation tracking and classification implementation
-  - Add hooks in organize engine (Day 1)
-  - Implement metrics collection (Day 1)
-  - Create file classification engine (Day 2)
-  - Implement baseline classifications (Day 2)
-- Days 3-4: Pattern detection implementation
-  - Develop detection algorithms (Day 3)
-  - Implement confidence scoring (Day 3)
-  - Create rule generation with classification support (Day 4)
-- Day 5: Initial testing of learning system
+4. **Phase 4: UI & User Experience**
+   - Add suggestions panel to UI
+   - Create classification management interface
+   - Implement feedback collection
+   - Add settings and configuration options
 
-### Week 4: UI Integration and Refinement
-- Days 1-2: Feedback mechanism implementation
-  - Create feedback collection UI (Day 1)
-  - Implement learning from feedback (Day 1)
-  - Develop classification feedback processing (Day 2)
-  - Develop rule refinement algorithms (Day 2)
-- Days 3-4: UI integration
-  - Add suggestions panel (Day 3)
-  - Add classifications management UI (Day 3)
-  - Implement rule testing interface (Day 4)
-  - Add advanced settings panel (Day 4)
-- Day 5: Final testing, documentation, and performance optimization
+5. **Dependencies & Requirements**
+   - Go embed for database embedding
+   - SQLite for structured storage
+   - UUID generation for unique identifiers
+   - JSON for criteria serialization/deserialization
+
+## Implementation Timeline (Refined)
+
+### Week 1: Foundation and Core Architecture
+1. Complete repository interface and SQLite implementation
+   - [x] Operation record storage and retrieval
+   - [x] Learning settings operations
+   - [ ] File classification methods
+   - [ ] Pattern detection methods
+   - [ ] Classification match methods
+   - [ ] Rule suggestion methods
+2. Set up core engine framework
+   - [x] Operation tracking
+   - [x] Analysis scheduling
+   - [x] Learning toggle functionality
+   - [ ] Classification engine
+
+#### Week 2: Pattern Detection and Classification
+1. Implement basic pattern detection algorithms
+   - [ ] Extension-based pattern detection
+   - [ ] Name-based pattern detection
+   - [ ] Time-based pattern detection
+   - [ ] Size-based pattern detection
+2. Build file classification system
+   - [ ] Implement `ClassifyFile` method
+   - [ ] Create confidence scoring system
+   - [ ] Build classification matching algorithm
+3. Implement content-based analysis system
+   - [ ] Create content signature generation
+   - [ ] Implement MIME type detection
+   - [ ] Build text content analysis (keywords, frequency maps)
+   - [ ] Develop image content analysis (metadata, color histograms)
+   - [ ] Set up document content extraction
+   - [ ] Create content signature storage
+
+#### Week 3: Content Analysis and Learning Engine
+1. Extend content analysis capabilities
+   - [ ] Implement content similarity engine
+   - [ ] Create content relationship discovery
+   - [ ] Build content group detection
+   - [ ] Integrate content analysis with classification
+2. Complete pattern learning system
+   - [ ] Implement pattern consolidation
+   - [ ] Build pattern weighting system
+   - [ ] Develop confidence threshold calibration
+3. Implement rule generation
+   - [ ] Create rule suggestion engine
+   - [ ] Build rule template system
+   - [ ] Implement rule confidence scoring
+   - [ ] Develop content-based rule generation
+
+#### Week 4: Feedback System and Integration
+1. Implement feedback mechanism
+   - [ ] Create feedback collection system
+   - [ ] Build reinforcement learning for patterns
+   - [ ] Implement user preference tracking
+2. Integrate with main application
+   - [ ] Add hooks in organize engine
+   - [ ] Create analysis triggers on file operations
+   - [ ] Build UI elements for rule suggestions
+   - [ ] Implement workflow suggestion feature
+3. Test and refine
+   - [ ] Create comprehensive test suite
+   - [ ] Perform performance optimization
+   - [ ] Refine confidence scoring algorithm
+   - [ ] Polish user experience for suggestions
+
+## Next Immediate Tasks
+
+To continue making progress on the Smart Rule Learning feature, we should focus on these immediate tasks:
+
+1. **Create Directory Structure**
+   - Create the `internal/patterns/learning` directory structure ✅
+   - Set up the `db` subdirectory for SQL files ✅
+
+2. **Database Schema Implementation**
+   - Implement the `schema.sql` file with the defined schema ✅
+   - Create the `classifications.sql` file with base classifications ✅
+
+3. **Core Package Implementation**
+   - Implement the data models in `model.go` ✅
+   - Create the repository interface in `persistence.go` ✅
+   - Implement the SQLite repository that implements the interface ✅
+
+4. **Configuration Management**
+   - Create the configuration structure in `config.go` ✅
+   - Implement configuration validation and defaults ✅
+
+5. **Database Initialization**
+   - Implement the database initialization with Go embed ✅
+   - Add proper error handling with the errors package ✅
+   - Implement connection management for concurrency ✅
+
+6. **Core Engine Implementation**
+   - Create the main learning engine in `engine.go` ✅
+   - Implement the operation tracking functionality ✅
+   - Add periodic analysis scheduling ✅
+
+7. **Fix Dependencies and Error Handling**
+   - Add missing dependencies (go-sqlite3, uuid) ✅
+   - Fix error handling implementation in repository ✅
+   - Fix logger parameter handling ✅
+
+8. **Next Steps for Implementation**
+   - Implement the pattern detector component
+   - Create the file classifier component
+   - Implement the suggestion generator
+   - Add hooks in the organize engine to track operations
 
 ## Progress Tracking
 
-We'll update this document as we complete each task, marking items as done and adding any additional tasks that emerge during implementation. Each task will be verified against the current codebase to ensure we're not duplicating existing functionality.
+We'll track progress on the Smart Rule Learning feature implementation with weekly updates, focusing on the following metrics:
+
+- **Code completion percentage**: Track completion of each component
+- **Test coverage**: Ensure proper test coverage for all components
+- **Integration status**: Track integration with the main application
+- **Performance metrics**: Monitor database operation performance
+- **User feedback**: Once implemented, collect user feedback on the feature
+
+Each completed task will be marked in this document, and any issues or new requirements that emerge during implementation will be documented and addressed.
