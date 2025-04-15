@@ -8,6 +8,7 @@ import (
 	"sortd/internal/config"
 	"sortd/internal/organize"
 	"sortd/internal/watch"
+
 	"strconv"
 	"strings"
 
