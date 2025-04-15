@@ -40,15 +40,32 @@ func NewAnalyzeContentCmd() *cobra.Command {
 			fmt.Println(primaryText("🔍 Content Analysis"))
 
 			// Get the path to analyze
-			path := "."
-			if len(args) > 0 {
-				path = args[0]
+			path := "." // Default path
+			var gumAvailable bool
+			if _, err := exec.LookPath("gum"); err == nil {
+				gumAvailable = true
 			}
 
-			// Check if gum is installed
-			if _, err := exec.LookPath("gum"); err != nil {
-				fmt.Println(errorText("Interactive features require gum to be installed."))
+			if len(args) > 0 {
+				path = args[0]
+			} else if gumAvailable {
+				// Use Gum to interactively select a path if none provided
+				fmt.Println(infoText("Select a file or directory to analyze:"))
+				pathChoice := runGumChoose("Enter path manually", "Browse filesystem")
+				if pathChoice == "Browse filesystem" {
+					path = runGumFile("") // Allows selecting file or directory
+				} else {
+					path = runGumInput("Enter path to analyze", ".")
+				}
+				if path == "" {
+					fmt.Println(infoText("No path selected. Exiting."))
+					return // Exit if no path was chosen
+				}
+			} else if len(args) == 0 { // No args and no gum
+				fmt.Println(errorText("Cannot run analysis without a path or interactive selection."))
+				fmt.Println(infoText("Please provide a path argument or install gum for interactive selection."))
 				fmt.Println(infoText("Install Gum from https://github.com/charmbracelet/gum"))
+				return
 			}
 
 			// Setup signal handling for clean exits
@@ -69,7 +86,7 @@ func NewAnalyzeContentCmd() *cobra.Command {
 			}
 
 			// Show analysis options if interactive
-			if _, err := exec.LookPath("gum"); err == nil {
+			if gumAvailable {
 				fmt.Println(infoText("Select analysis type:"))
 				analysisType := runGumChoose(
 					"Basic content detection",
@@ -128,9 +145,41 @@ func NewAnalyzeDuplicatesCmd() *cobra.Command {
 			fmt.Println(primaryText("🔍 Duplicate File Detection"))
 
 			// Get the path to analyze
-			path := "."
+			path := "." // Default path
+			var gumAvailable bool
+			if _, err := exec.LookPath("gum"); err == nil {
+				gumAvailable = true
+			}
+
 			if len(args) > 0 {
 				path = args[0]
+			} else if gumAvailable {
+				// Use Gum to interactively select a path if none provided
+				fmt.Println(infoText("Select a directory to scan for duplicates:"))
+				pathChoice := runGumChoose("Enter path manually", "Browse directories")
+				if pathChoice == "Browse directories" {
+					path = runGumFile("--directory") // Only allow directory selection
+				} else {
+					path = runGumInput("Enter directory path", ".")
+				}
+				if path == "" {
+					fmt.Println(infoText("No path selected. Exiting."))
+					return // Exit if no path was chosen
+				}
+			} else if len(args) == 0 { // No args and no gum
+				fmt.Println(errorText("Cannot run duplicate detection without a path or interactive selection."))
+				fmt.Println(infoText("Please provide a path argument or install gum for interactive selection."))
+				fmt.Println(infoText("Install Gum from https://github.com/charmbracelet/gum"))
+				return
+			}
+
+			// Add placeholder interactive options if gum is available
+			var hashingAlgorithm, minSize string
+			if gumAvailable {
+				fmt.Println(infoText("Select duplicate detection options:"))
+				hashingAlgorithm = runGumChoose("SHA256", "SHA1", "MD5")
+				minSize = runGumInput("Minimum file size (e.g., 1KB, 1MB, leave blank for all)", "1KB")
+				fmt.Printf(successText("Options set: Hash=%s, MinSize=%s\n"), hashingAlgorithm, minSize)
 			}
 
 			// Show a message about the upcoming feature
@@ -221,9 +270,41 @@ func NewAnalyzeGroupCmd() *cobra.Command {
 			fmt.Println(primaryText("🔍 Semantic Grouping"))
 
 			// Get the path to analyze
-			path := "."
+			path := "." // Default path
+			var gumAvailable bool
+			if _, err := exec.LookPath("gum"); err == nil {
+				gumAvailable = true
+			}
+
 			if len(args) > 0 {
 				path = args[0]
+			} else if gumAvailable {
+				// Use Gum to interactively select a path if none provided
+				fmt.Println(infoText("Select a directory to group files in:"))
+				pathChoice := runGumChoose("Enter path manually", "Browse directories")
+				if pathChoice == "Browse directories" {
+					path = runGumFile("--directory") // Only allow directory selection
+				} else {
+					path = runGumInput("Enter directory path", ".")
+				}
+				if path == "" {
+					fmt.Println(infoText("No path selected. Exiting."))
+					return // Exit if no path was chosen
+				}
+			} else if len(args) == 0 { // No args and no gum
+				fmt.Println(errorText("Cannot run semantic grouping without a path or interactive selection."))
+				fmt.Println(infoText("Please provide a path argument or install gum for interactive selection."))
+				fmt.Println(infoText("Install Gum from https://github.com/charmbracelet/gum"))
+				return
+			}
+
+			// Add placeholder interactive options if gum is available
+			var similarityThreshold, groupingMethod string
+			if gumAvailable {
+				fmt.Println(infoText("Select semantic grouping options:"))
+				similarityThreshold = runGumInput("Similarity threshold (0.0-1.0)", "0.8")
+				groupingMethod = runGumChoose("Content", "Filename", "Metadata")
+				fmt.Printf(successText("Options set: Threshold=%s, Method=%s\n"), similarityThreshold, groupingMethod)
 			}
 
 			// Show a message about the upcoming feature

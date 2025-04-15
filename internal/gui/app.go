@@ -38,6 +38,9 @@ type App struct {
 	// Theme settings
 	accentColor color.NRGBA
 	bgColor     color.NRGBA
+
+	// Active workflow wizard (if any)
+	activeWizard *WorkflowWizard
 }
 
 // NewApp creates a new GUI application
@@ -398,7 +401,17 @@ func (a *App) createWorkflowsTab() fyne.CanvasObject {
 
 	// Create button actions
 	newButton := widget.NewButtonWithIcon("New Workflow", theme.ContentAddIcon(), func() {
-		NewWorkflowWizard(a).Show()
+		// Close existing wizard if one is already open
+		if a.activeWizard != nil {
+			if a.activeWizard.window != nil {
+				a.activeWizard.window.Close()
+			}
+			a.activeWizard = nil
+		}
+
+		// Create and store the wizard
+		a.activeWizard = NewWorkflowWizard(a)
+		a.activeWizard.Show()
 	})
 
 	editButton := widget.NewButtonWithIcon("Edit", theme.DocumentCreateIcon(), func() {
